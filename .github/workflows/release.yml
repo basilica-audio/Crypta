@@ -1,0 +1,463 @@
+name: Release
+
+# Cuts a signed, notarized macOS build (AU + VST3) and an unsigned Windows
+# VST3 build, then publishes both as assets on a GitHub Release.
+#
+# How to cut a release:
+#   git tag -s v1.0.0 && git push origin v1.0.0
+# See docs/releasing.md for the full runbook, including how to provision the
+# required secrets.
+#
+# `workflow_dispatch` allows a structural dry-run (build + package, no
+# signing/notarization/publish) before any tag or secret exists — see the
+# "Check signing/notarization secrets" step below. Note that even if the
+# five signing secrets happen to be configured on the repository, a
+# `workflow_dispatch` run on a non-tag ref is ALWAYS a structural dry run:
+# the codesign/notarize/staple steps additionally require the ref to be a
+# `refs/tags/v*` ref, so secrets alone can never trigger real signing.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    name: macOS — build, sign, notarize
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    outputs:
+      has_secrets: ${{ steps.secrets-check.outputs.has_secrets }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set CPM source cache path
+        shell: bash
+        run: echo "CPM_SOURCE_CACHE=$HOME/.cache/CPM" >> "$GITHUB_ENV"
+
+      - name: Cache CPM dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: ${{ runner.os }}-cpm-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-cpm-
+
+      - name: Install Ninja
+        run: brew install ninja
+
+      - name: Configure (Universal Release)
+        run: >
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Build AU + VST3
+        run: cmake --build build --target TwistYourGuts_AU --target TwistYourGuts_VST3
+
+      - name: Locate plugin artefacts
+        id: artefacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARTEFACT_ROOT="build/TwistYourGuts_artefacts"
+
+          VST3_PATH=$(find "$ARTEFACT_ROOT" -type d -iname "*.vst3" | head -n 1)
+          if [ -z "$VST3_PATH" ]; then
+            echo "::error::No .vst3 artefact found under $ARTEFACT_ROOT"
+            exit 1
+          fi
+          echo "vst3_path=$VST3_PATH" >> "$GITHUB_OUTPUT"
+          echo "Found VST3 at: $VST3_PATH"
+
+          COMPONENT_PATH=$(find "$ARTEFACT_ROOT" -type d -iname "*.component" | head -n 1)
+          if [ -z "$COMPONENT_PATH" ]; then
+            echo "::error::No .component artefact found under $ARTEFACT_ROOT"
+            exit 1
+          fi
+          echo "component_path=$COMPONENT_PATH" >> "$GITHUB_OUTPUT"
+          echo "Found AU component at: $COMPONENT_PATH"
+
+      - name: Check signing/notarization secrets
+        id: secrets-check
+        shell: bash
+        env:
+          DEVELOPER_ID_APP_CERT_BASE64: ${{ secrets.DEVELOPER_ID_APP_CERT_BASE64 }}
+          DEVELOPER_ID_APP_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_APP_CERT_PASSWORD }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -n "${DEVELOPER_ID_APP_CERT_BASE64:-}" ] && \
+             [ -n "${DEVELOPER_ID_APP_CERT_PASSWORD:-}" ] && \
+             [ -n "${APP_STORE_CONNECT_API_KEY_ID:-}" ] && \
+             [ -n "${APP_STORE_CONNECT_ISSUER_ID:-}" ] && \
+             [ -n "${APP_STORE_CONNECT_API_KEY_BASE64:-}" ]; then
+            echo "has_secrets=true" >> "$GITHUB_OUTPUT"
+            echo "Signing/notarization secrets present — will sign, notarize, and staple."
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            # A tag push is the trigger that produces an official release. Never
+            # let a tag push silently fall through to an unsigned dry-run: that
+            # would let a missing/misnamed secret ship an unsigned build as the
+            # official v* release. This is a hard failure, not a warning.
+            echo "has_secrets=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Tag push (${GITHUB_REF}) but one or more of the five required signing/notarization secrets are absent or empty. Refusing to publish an unsigned build as an official release — see docs/releasing.md for how to provision the secrets."
+            exit 1
+          else
+            # Only a workflow_dispatch run on a non-tag ref is allowed to fall
+            # back to a soft warning and continue as a structural dry-run.
+            echo "has_secrets=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Signing/notarization secrets are absent — skipping sign/notarize/staple (dry-run build only)."
+          fi
+
+      - name: Import Developer ID certificate into temporary keychain
+        if: steps.secrets-check.outputs.has_secrets == 'true' && startsWith(github.ref, 'refs/tags/v')
+        id: keychain
+        shell: bash
+        env:
+          DEVELOPER_ID_APP_CERT_BASE64: ${{ secrets.DEVELOPER_ID_APP_CERT_BASE64 }}
+          DEVELOPER_ID_APP_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_APP_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${APPLE_TEAM_ID:-}" ]; then
+            echo "::error::vars.APPLE_TEAM_ID is not set"
+            exit 1
+          fi
+
+          KEYCHAIN="$RUNNER_TEMP/signing-$(uuidgen).keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          P12_PATH="$RUNNER_TEMP/developer_id_app.p12"
+
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+
+          # The .p12 only needs to exist for this step (import happens here),
+          # so it is safe to wipe it on this step's own exit. The keychain
+          # itself must survive into later steps (codesign, notarize) and is
+          # deleted explicitly by the always()-guarded cleanup step below.
+          trap 'rm -f "$P12_PATH"' EXIT
+
+          printf '%s' "$DEVELOPER_ID_APP_CERT_BASE64" | base64 --decode > "$P12_PATH"
+          chmod 600 "$P12_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          security import "$P12_PATH" -k "$KEYCHAIN" -P "$DEVELOPER_ID_APP_CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+
+          EXISTING_KEYCHAINS=()
+          while IFS= read -r line; do
+            EXISTING_KEYCHAINS+=("$line")
+          done < <(security list-keychains -d user | sed 's/^[[:space:]]*"//; s/"[[:space:]]*$//')
+          security list-keychains -d user -s "$KEYCHAIN" "${EXISTING_KEYCHAINS[@]}"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN" >> "$GITHUB_ENV"
+
+          IDENTITY_LINE=$(security find-identity -v -p codesigning "$KEYCHAIN" | grep "Developer ID Application" | head -n 1 || true)
+          if [ -z "$IDENTITY_LINE" ]; then
+            echo "::error::No 'Developer ID Application' identity found in the imported certificate"
+            exit 1
+          fi
+
+          IDENTITY=$(echo "$IDENTITY_LINE" | sed -E 's/.*"(Developer ID Application[^"]+)".*/\1/')
+          # The Developer ID Application common name ends in "(TEAMID)" —
+          # cross-check it against vars.APPLE_TEAM_ID as a defensive guard
+          # against accidentally importing the wrong certificate.
+          CERT_TEAM_ID=$(echo "$IDENTITY" | sed -E 's/.*\(([A-Z0-9]+)\)[[:space:]]*$/\1/')
+          if [ "$CERT_TEAM_ID" != "$APPLE_TEAM_ID" ]; then
+            echo "::error::Imported certificate Team ID ($CERT_TEAM_ID) does not match vars.APPLE_TEAM_ID ($APPLE_TEAM_ID)"
+            exit 1
+          fi
+
+          echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
+          echo "Resolved signing identity: $IDENTITY"
+
+      - name: Codesign AU and VST3 bundles
+        if: steps.secrets-check.outputs.has_secrets == 'true' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          IDENTITY: ${{ steps.keychain.outputs.identity }}
+          COMPONENT_PATH: ${{ steps.artefacts.outputs.component_path }}
+          VST3_PATH: ${{ steps.artefacts.outputs.vst3_path }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$KEYCHAIN_PATH"
+
+          # No nested executables/frameworks are bundled inside the JUCE-generated
+          # AU/VST3 (single Mach-O binary + resources) — sign the bundle directly
+          # rather than recursing with --deep, per Apple's current guidance that
+          # --deep should not be used for distribution signing.
+          codesign --force --strict --options runtime --timestamp \
+            --keychain "$KEYCHAIN" --sign "$IDENTITY" \
+            "$COMPONENT_PATH"
+          codesign --verify --strict --verbose=4 "$COMPONENT_PATH"
+
+          codesign --force --strict --options runtime --timestamp \
+            --keychain "$KEYCHAIN" --sign "$IDENTITY" \
+            "$VST3_PATH"
+          codesign --verify --strict --verbose=4 "$VST3_PATH"
+
+          codesign -dv --verbose=4 "$COMPONENT_PATH"
+          codesign -dv --verbose=4 "$VST3_PATH"
+
+      - name: Notarize signed bundles
+        if: steps.secrets-check.outputs.has_secrets == 'true' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+          COMPONENT_PATH: ${{ steps.artefacts.outputs.component_path }}
+          VST3_PATH: ${{ steps.artefacts.outputs.vst3_path }}
+        run: |
+          set -euo pipefail
+
+          P8_PATH="$RUNNER_TEMP/AuthKey_notarization.p8"
+          STAGE_DIR="$RUNNER_TEMP/notarize-stage"
+          NOTARIZE_ZIP="$RUNNER_TEMP/notarize-submission.zip"
+          RESULT_JSON="$RUNNER_TEMP/notarize-result.json"
+
+          trap 'rm -f "$P8_PATH" "$NOTARIZE_ZIP" "$RESULT_JSON"; rm -rf "$STAGE_DIR"' EXIT
+
+          printf '%s' "$APP_STORE_CONNECT_API_KEY_BASE64" | base64 --decode > "$P8_PATH"
+          chmod 600 "$P8_PATH"
+
+          mkdir -p "$STAGE_DIR"
+          cp -R "$COMPONENT_PATH" "$STAGE_DIR/"
+          cp -R "$VST3_PATH" "$STAGE_DIR/"
+          ditto -c -k --keepParent "$STAGE_DIR" "$NOTARIZE_ZIP"
+
+          xcrun notarytool submit "$NOTARIZE_ZIP" \
+            --key "$P8_PATH" \
+            --key-id "$APP_STORE_CONNECT_API_KEY_ID" \
+            --issuer "$APP_STORE_CONNECT_ISSUER_ID" \
+            --wait \
+            --output-format json > "$RESULT_JSON"
+
+          STATUS=$(jq -r '.status' "$RESULT_JSON")
+          SUBMISSION_ID=$(jq -r '.id' "$RESULT_JSON")
+          echo "Notarization status: $STATUS (submission $SUBMISSION_ID)"
+
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "::error::Notarization did not succeed (status: $STATUS)"
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --key "$P8_PATH" \
+              --key-id "$APP_STORE_CONNECT_API_KEY_ID" \
+              --issuer "$APP_STORE_CONNECT_ISSUER_ID" || true
+            exit 1
+          fi
+
+      - name: Staple and verify notarization
+        if: steps.secrets-check.outputs.has_secrets == 'true' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          COMPONENT_PATH: ${{ steps.artefacts.outputs.component_path }}
+          VST3_PATH: ${{ steps.artefacts.outputs.vst3_path }}
+        run: |
+          set -euo pipefail
+
+          xcrun stapler staple "$COMPONENT_PATH"
+          xcrun stapler staple "$VST3_PATH"
+
+          xcrun stapler validate "$COMPONENT_PATH"
+          xcrun stapler validate "$VST3_PATH"
+
+          codesign -dv --verbose=4 "$COMPONENT_PATH"
+          codesign -dv --verbose=4 "$VST3_PATH"
+
+          # spctl's --type install assessment is the closest Gatekeeper check
+          # available for non-.app bundles from the command line; it is
+          # informational here (stapler validate above is the authoritative
+          # gate), so failures are logged but do not fail the job.
+          spctl -a -vvv --type install "$COMPONENT_PATH" || \
+            echo "::warning::spctl assessment reported an issue for the AU component (see log above)"
+          spctl -a -vvv --type install "$VST3_PATH" || \
+            echo "::warning::spctl assessment reported an issue for the VST3 (see log above)"
+
+      - name: Clean up temporary keychain
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${KEYCHAIN_PATH:-}" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+          fi
+
+      - name: Package macOS release zip
+        id: package
+        shell: bash
+        env:
+          HAS_SECRETS: ${{ steps.secrets-check.outputs.has_secrets }}
+          COMPONENT_PATH: ${{ steps.artefacts.outputs.component_path }}
+          VST3_PATH: ${{ steps.artefacts.outputs.vst3_path }}
+        run: |
+          set -euo pipefail
+          PKG_DIR="$RUNNER_TEMP/package"
+          mkdir -p "$PKG_DIR" dist
+
+          cp -R "$COMPONENT_PATH" "$PKG_DIR/"
+          cp -R "$VST3_PATH" "$PKG_DIR/"
+          cp LICENSE "$PKG_DIR/"
+          cp README.md "$PKG_DIR/"
+
+          # An unsigned dry-run build must never be filename-identical to a
+          # real signed release asset.
+          if [ "$HAS_SECRETS" = "true" ]; then
+            ZIP_NAME="TwistYourGuts-macOS.zip"
+          else
+            ZIP_NAME="TwistYourGuts-macOS-unsigned-dryrun.zip"
+          fi
+          echo "zip_name=$ZIP_NAME" >> "$GITHUB_OUTPUT"
+
+          ( cd "$PKG_DIR" && zip -r -y "$RUNNER_TEMP/$ZIP_NAME" . )
+          cp "$RUNNER_TEMP/$ZIP_NAME" dist/
+
+      - name: Upload macOS release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.secrets-check.outputs.has_secrets == 'true' && 'twist-your-guts-macos' || 'twist-your-guts-macos-unsigned-dryrun' }}
+          path: dist/${{ steps.package.outputs.zip_name }}
+          if-no-files-found: error
+
+  windows:
+    name: Windows — build VST3 (unsigned)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set CPM source cache path
+        shell: bash
+        run: echo "CPM_SOURCE_CACHE=$HOME/.cache/CPM" >> "$GITHUB_ENV"
+
+      - name: Cache CPM dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: ${{ runner.os }}-cpm-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-cpm-
+
+      - name: Configure
+        run: cmake -B build
+
+      - name: Build VST3
+        run: cmake --build build --config Release --target TwistYourGuts_VST3
+
+      - name: Locate plugin artefact
+        id: artefacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARTEFACT_ROOT="build/TwistYourGuts_artefacts"
+          VST3_PATH=$(find "$ARTEFACT_ROOT" -type d -iname "*.vst3" | head -n 1)
+          if [ -z "$VST3_PATH" ]; then
+            echo "::error::No .vst3 artefact found under $ARTEFACT_ROOT"
+            exit 1
+          fi
+          echo "vst3_path=$VST3_PATH" >> "$GITHUB_OUTPUT"
+          echo "Found VST3 at: $VST3_PATH"
+
+      - name: Package Windows release zip
+        shell: bash
+        env:
+          VST3_PATH: ${{ steps.artefacts.outputs.vst3_path }}
+        run: |
+          set -euo pipefail
+          PKG_DIR="$RUNNER_TEMP/package"
+          mkdir -p "$PKG_DIR" dist
+
+          cp -R "$VST3_PATH" "$PKG_DIR/"
+          cp LICENSE "$PKG_DIR/"
+          cp README.md "$PKG_DIR/"
+
+          ( cd "$PKG_DIR" && 7z a -tzip "$RUNNER_TEMP/TwistYourGuts-Windows-VST3.zip" . )
+          cp "$RUNNER_TEMP/TwistYourGuts-Windows-VST3.zip" dist/
+
+      - name: Upload Windows release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: twist-your-guts-windows
+          path: dist/TwistYourGuts-Windows-VST3.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: [macos, windows]
+    if: startsWith(github.ref, 'refs/tags/v') && needs.macos.outputs.has_secrets == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: twist-your-guts-macos
+          path: dist
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: twist-your-guts-windows
+          path: dist
+
+      - name: Extract CHANGELOG section for this tag
+        id: changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+
+          if awk -v ver="$VERSION" '
+            /^## \[/ {
+              if (found) exit
+              if (index($0, "[" ver "]") > 0) { found=1; next }
+              next
+            }
+            found { print }
+          ' CHANGELOG.md > "$NOTES_FILE" && [ -s "$NOTES_FILE" ]; then
+            echo "Found CHANGELOG.md section for [$VERSION]"
+          else
+            echo "::warning::No CHANGELOG.md section found for [$VERSION] — using a placeholder release body."
+            printf 'Release %s.\n\nSee CHANGELOG.md for full details.\n' "$GITHUB_REF_NAME" > "$NOTES_FILE"
+          fi
+
+          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES_FILE: ${{ steps.changelog.outputs.notes_file }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "Twist Your Guts $GITHUB_REF_NAME" \
+              --notes-file "$NOTES_FILE"
+            gh release upload "$GITHUB_REF_NAME" \
+              dist/TwistYourGuts-macOS.zip \
+              dist/TwistYourGuts-Windows-VST3.zip \
+              --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "Twist Your Guts $GITHUB_REF_NAME" \
+              --notes-file "$NOTES_FILE" \
+              dist/TwistYourGuts-macOS.zip \
+              dist/TwistYourGuts-Windows-VST3.zip
+          fi

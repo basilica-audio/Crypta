@@ -105,3 +105,12 @@ This project uses [JUCE](https://juce.com) 8, whose open-source tier is licensed
 VST is a registered trademark of Steinberg Media Technologies GmbH.
 
 Twist Your Guts is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Neural DSP or the makers of any Parallax-branded product; any naming similarity refers only to the general "parallel bass processing" concept, not to any specific commercial product.
+
+## Releases & installation
+
+Tagged releases (`v*`) are built and published automatically by [`.github/workflows/release.yml`](.github/workflows/release.yml):
+
+- **macOS** — AU (`.component`) and VST3 (`.vst3`), Universal Binary (arm64 + x86_64), signed with a Developer ID Application certificate, notarized, and stapled. Installs and opens without a Gatekeeper warning.
+- **Windows** — VST3, **unsigned**. On first run, Windows SmartScreen may show a "Windows protected your PC" warning; choose **More info → Run anyway** to proceed. A signed Windows build is a documented future improvement, not yet available.
+
+See [`docs/releasing.md`](docs/releasing.md) for the full release runbook and [ADR 0006](docs/adr/0006-macos-signing-notarization.md) for the signing/notarization design rationale. This pipeline is dormant until the first `v*` tag is pushed with the required signing secrets configured — no releases have been published yet (see the work-in-progress notice above).
