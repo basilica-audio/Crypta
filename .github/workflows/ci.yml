@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set CPM source cache path
+        shell: bash
+        run: echo "CPM_SOURCE_CACHE=$HOME/.cache/CPM" >> "$GITHUB_ENV"
+
+      - name: Cache CPM dependencies
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: ${{ runner.os }}-cpm-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-cpm-
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Configure (macOS)
+        if: runner.os == 'macOS'
+        run: >
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        run: cmake -B build
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: cmake --build build
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: cmake --build build --config Release
+
+      - name: Test (macOS)
+        if: runner.os == 'macOS'
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        run: ctest --test-dir build --output-on-failure -C Release
+
+      - name: Locate plugin artefacts
+        id: artefacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARTEFACT_ROOT="build/TwistYourGuts_artefacts"
+          # JUCE's artefact path may or may not include a Release/ segment
+          # depending on whether the generator is single- or multi-config.
+          VST3_PATH=$(find "$ARTEFACT_ROOT" -type d -iname "*.vst3" | head -n 1)
+          if [ -z "$VST3_PATH" ]; then
+            echo "::error::No .vst3 artefact found under $ARTEFACT_ROOT"
+            exit 1
+          fi
+          echo "vst3_path=$VST3_PATH" >> "$GITHUB_OUTPUT"
+          echo "Found VST3 at: $VST3_PATH"
+
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            COMPONENT_PATH=$(find "$ARTEFACT_ROOT" -type d -iname "*.component" | head -n 1)
+            if [ -z "$COMPONENT_PATH" ]; then
+              echo "::error::No .component artefact found under $ARTEFACT_ROOT"
+              exit 1
+            fi
+            echo "component_path=$COMPONENT_PATH" >> "$GITHUB_OUTPUT"
+            echo "Found AU component at: $COMPONENT_PATH"
+          fi
+
+      - name: Download pluginval (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          curl -sL -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip"
+          unzip -q pluginval.zip -d pluginval
+          chmod +x "pluginval/pluginval.app/Contents/MacOS/pluginval"
+
+      - name: Download pluginval (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip" -OutFile pluginval.zip
+          Expand-Archive -Path pluginval.zip -DestinationPath pluginval
+
+      - name: Run pluginval (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          "pluginval/pluginval.app/Contents/MacOS/pluginval" \
+            --strictness-level 10 \
+            --validate "${{ steps.artefacts.outputs.vst3_path }}"
+
+      - name: Run pluginval (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          & ".\pluginval\pluginval.exe" --strictness-level 10 --validate "${{ steps.artefacts.outputs.vst3_path }}"
+
+      - name: auval validation (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "${{ steps.artefacts.outputs.component_path }}" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          auval -strict -v aufx Tygt Yvsv
+
+      - name: Upload plugin artefacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: twist-your-guts-${{ matrix.os }}
+          path: build/TwistYourGuts_artefacts/**
+          if-no-files-found: error
