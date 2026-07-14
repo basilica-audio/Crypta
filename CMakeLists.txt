@@ -11,7 +11,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS deployment ta
 # here at the top level avoids it being enabled implicitly deeper inside
 # JUCE's CMake helpers, which has been observed to break Ninja's generate
 # step (missing CMAKE_C_COMPILE_OBJECT rule variable).
-project(TwistYourGuts VERSION 0.1.0 LANGUAGES C CXX)
+project(Crypta VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,7 +27,7 @@ include(cmake/CPM.cmake)
 # CPMAddPackage automatically respects the CPM_SOURCE_CACHE environment
 # variable if it is set, reusing a shared package cache across builds/checkouts.
 if(DEFINED ENV{CPM_SOURCE_CACHE})
-    message(STATUS "TwistYourGuts: using CPM_SOURCE_CACHE at $ENV{CPM_SOURCE_CACHE}")
+    message(STATUS "Crypta: using CPM_SOURCE_CACHE at $ENV{CPM_SOURCE_CACHE}")
 endif()
 
 CPMAddPackage(
@@ -41,13 +41,13 @@ CPMAddPackage(
 # Plugin target
 # ==============================================================================
 
-juce_add_plugin(TwistYourGuts
+juce_add_plugin(Crypta
     COMPANY_NAME "Yves Vogl"
-    BUNDLE_ID com.yvesvogl.twistyourguts
+    BUNDLE_ID com.yvesvogl.crypta
     PLUGIN_MANUFACTURER_CODE Yvsv
-    PLUGIN_CODE Tygt
+    PLUGIN_CODE Cryp
     FORMATS AU VST3 Standalone
-    PRODUCT_NAME "Twist Your Guts"
+    PRODUCT_NAME "Crypta"
     COPY_PLUGIN_AFTER_BUILD TRUE
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
@@ -66,11 +66,11 @@ add_library(SharedCode INTERFACE)
 
 target_compile_features(SharedCode INTERFACE cxx_std_20)
 
-file(GLOB_RECURSE TwistYourGutsSources CONFIGURE_DEPENDS
+file(GLOB_RECURSE CryptaSources CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h")
 
-target_sources(SharedCode INTERFACE ${TwistYourGutsSources})
+target_sources(SharedCode INTERFACE ${CryptaSources})
 
 target_include_directories(SharedCode INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
@@ -90,7 +90,7 @@ target_link_libraries(SharedCode INTERFACE
     juce::juce_recommended_warning_flags
 )
 
-target_link_libraries(TwistYourGuts PRIVATE SharedCode)
+target_link_libraries(Crypta PRIVATE SharedCode)
 
 # ==============================================================================
 # Tests
@@ -105,11 +105,11 @@ CPMAddPackage(
     GIT_TAG v3.15.2
 )
 
-file(GLOB_RECURSE TwistYourGutsTestSources CONFIGURE_DEPENDS
+file(GLOB_RECURSE CryptaTestSources CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.h")
 
-add_executable(Tests ${TwistYourGutsTestSources})
+add_executable(Tests ${CryptaTestSources})
 
 target_compile_features(Tests PRIVATE cxx_std_20)
 
@@ -118,7 +118,7 @@ target_link_libraries(Tests PRIVATE SharedCode Catch2::Catch2)
 # Copy over the plugin target's compile definitions (JucePlugin_* macros etc.)
 # so plugin code compiles identically when built as part of the Tests binary.
 target_compile_definitions(Tests PRIVATE
-    $<TARGET_PROPERTY:TwistYourGuts,COMPILE_DEFINITIONS>
+    $<TARGET_PROPERTY:Crypta,COMPILE_DEFINITIONS>
     JUCE_MODAL_LOOPS_PERMITTED=1
 )
 
@@ -127,9 +127,9 @@ set_target_properties(Tests PROPERTIES XCODE_GENERATE_SCHEME ON)
 include(${Catch2_SOURCE_DIR}/extras/Catch.cmake)
 
 if(CMAKE_GENERATOR STREQUAL "Xcode")
-    set(TwistYourGutsDiscoveryMode PRE_TEST)
+    set(CryptaDiscoveryMode PRE_TEST)
 else()
-    set(TwistYourGutsDiscoveryMode POST_BUILD)
+    set(CryptaDiscoveryMode POST_BUILD)
 endif()
 
-catch_discover_tests(Tests DISCOVERY_MODE ${TwistYourGutsDiscoveryMode})
+catch_discover_tests(Tests DISCOVERY_MODE ${CryptaDiscoveryMode})
