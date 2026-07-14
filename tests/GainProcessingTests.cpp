@@ -23,12 +23,35 @@ namespace
             processor.processBlock (buffer, midi);
         }
     }
+
+    // Since issue #42 wired the low-band parallel compressor and high-band
+    // voicing permanently into the signal path, the plugin is no longer
+    // level-transparent at its *default* parameters (lowCompMix defaults to
+    // 100% wet with a -18dB threshold, and highBlend defaults to 100% wet
+    // Gnaw hard-clip distortion) - that's by design, not a regression. These
+    // pure gain-staging tests are about input/output trim math, not
+    // compressor/voicing character (which get their own dedicated tests in
+    // ParallelCompressorTests.cpp/VoicingTests.cpp), so they pull both
+    // stages' blend controls to 0% (fully dry) to isolate the gain-staging
+    // path being tested.
+    void neutralizeDynamicsAndVoicing (TwistYourGutsAudioProcessor& processor)
+    {
+        auto* lowCompMixParam = processor.apvts.getParameter (ParamIDs::lowCompMix);
+        auto* highBlendParam = processor.apvts.getParameter (ParamIDs::highBlend);
+        REQUIRE (lowCompMixParam != nullptr);
+        REQUIRE (highBlendParam != nullptr);
+
+        lowCompMixParam->setValueNotifyingHost (lowCompMixParam->convertTo0to1 (0.0f));
+        highBlendParam->setValueNotifyingHost (highBlendParam->convertTo0to1 (0.0f));
+    }
 }
 
 TEST_CASE ("Gain math: +6dB input gain doubles the RMS level", "[gain][dsp]")
 {
     TwistYourGutsAudioProcessor processor;
     processor.prepareToPlay (testSampleRate, testBlockSize);
+
+    neutralizeDynamicsAndVoicing (processor);
 
     auto* inputGainParam = processor.apvts.getParameter (ParamIDs::inputGain);
     REQUIRE (inputGainParam != nullptr);
@@ -69,6 +92,7 @@ TEST_CASE ("Passthrough level test: default parameters leave the signal level un
     // rigorously, across many probe frequencies, in CrossoverTests.cpp.
     TwistYourGutsAudioProcessor processor;
     processor.prepareToPlay (testSampleRate, testBlockSize);
+    neutralizeDynamicsAndVoicing (processor);
 
     settleSmoothing (processor);
 

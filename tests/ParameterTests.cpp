@@ -218,9 +218,11 @@ TEST_CASE ("Processor instantiates with the expected parameters", "[processor][p
         CHECK (processor.getBypassParameter() == apvts.getParameter (ParamIDs::bypass));
     }
 
-    SECTION ("reports zero latency")
+    SECTION ("reports positive latency once prepared (issue #42's oversampled high-band voicing)")
     {
-        processor.prepareToPlay (48000.0, 512);
         CHECK (processor.getLatencySamples() == 0);
+
+        processor.prepareToPlay (48000.0, 512);
+        CHECK (processor.getLatencySamples() > 0);
     }
 }

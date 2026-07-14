@@ -29,6 +29,27 @@ namespace
     // is a stateful IIR filter, so restarting the sine at phase zero every
     // block would inject a small broadband transient at each boundary and
     // pollute the level measurement.
+    // Since issue #42 wired the low-band parallel compressor and high-band
+    // voicing permanently into the signal path, both bands are no longer
+    // level-transparent at their *default* parameters (lowCompMix defaults
+    // to 100% wet with a -18dB threshold that a 0.5-amplitude probe tone
+    // sits well above; highBlend defaults to 100% wet Gnaw hard-clip
+    // distortion) - that's by design, not a regression. These tests are
+    // about the lowLevel/highLevel *trim* controls, not compressor/voicing
+    // character (which get their own dedicated tests), so both stages'
+    // blend controls are pulled to 0% (fully dry) up front to isolate the
+    // level-trim behaviour being tested.
+    void neutralizeDynamicsAndVoicing (TwistYourGutsAudioProcessor& processor)
+    {
+        auto* lowCompMixParam = processor.apvts.getParameter (ParamIDs::lowCompMix);
+        auto* highBlendParam = processor.apvts.getParameter (ParamIDs::highBlend);
+        REQUIRE (lowCompMixParam != nullptr);
+        REQUIRE (highBlendParam != nullptr);
+
+        lowCompMixParam->setValueNotifyingHost (lowCompMixParam->convertTo0to1 (0.0f));
+        highBlendParam->setValueNotifyingHost (highBlendParam->convertTo0to1 (0.0f));
+    }
+
     double measureSettledLevelDb (TwistYourGutsAudioProcessor& processor, double probeFrequencyHz)
     {
         juce::AudioBuffer<float> buffer (2, testBlockSize);
@@ -49,6 +70,7 @@ TEST_CASE ("Gain staging: lowLevel attenuates the low band only", "[gain-staging
 {
     TwistYourGutsAudioProcessor processor;
     processor.prepareToPlay (testSampleRate, testBlockSize);
+    neutralizeDynamicsAndVoicing (processor);
 
     auto* lowLevelParam = processor.apvts.getParameter (ParamIDs::lowLevel);
     REQUIRE (lowLevelParam != nullptr);
@@ -57,6 +79,7 @@ TEST_CASE ("Gain staging: lowLevel attenuates the low band only", "[gain-staging
 
     TwistYourGutsAudioProcessor attenuatedProcessor;
     attenuatedProcessor.prepareToPlay (testSampleRate, testBlockSize);
+    neutralizeDynamicsAndVoicing (attenuatedProcessor);
     auto* attenuatedLowLevelParam = attenuatedProcessor.apvts.getParameter (ParamIDs::lowLevel);
     REQUIRE (attenuatedLowLevelParam != nullptr);
     attenuatedLowLevelParam->setValueNotifyingHost (attenuatedLowLevelParam->convertTo0to1 (-12.0f));
@@ -66,6 +89,7 @@ TEST_CASE ("Gain staging: lowLevel attenuates the low band only", "[gain-staging
 
     TwistYourGutsAudioProcessor referenceProcessor;
     referenceProcessor.prepareToPlay (testSampleRate, testBlockSize);
+    neutralizeDynamicsAndVoicing (referenceProcessor);
     const auto referenceHighLevelDb = measureSettledLevelDb (referenceProcessor, highProbeFrequencyHz);
 
     // A low-frequency probe should drop by ~12 dB when lowLevel is -12 dB...
@@ -79,14 +103,17 @@ TEST_CASE ("Gain staging: highLevel attenuates the high band only", "[gain-stagi
 {
     TwistYourGutsAudioProcessor referenceProcessor;
     referenceProcessor.prepareToPlay (testSampleRate, testBlockSize);
+    neutralizeDynamicsAndVoicing (referenceProcessor);
     const auto referenceLowLevelDb = measureSettledLevelDb (referenceProcessor, lowProbeFrequencyHz);
 
     TwistYourGutsAudioProcessor referenceProcessor2;
     referenceProcessor2.prepareToPlay (testSampleRate, testBlockSize);
+    neutralizeDynamicsAndVoicing (referenceProcessor2);
     const auto referenceHighLevelDb = measureSettledLevelDb (referenceProcessor2, highProbeFrequencyHz);
 
     TwistYourGutsAudioProcessor attenuatedProcessor;
     attenuatedProcessor.prepareToPlay (testSampleRate, testBlockSize);
+    neutralizeDynamicsAndVoicing (attenuatedProcessor);
     auto* attenuatedHighLevelParam = attenuatedProcessor.apvts.getParameter (ParamIDs::highLevel);
     REQUIRE (attenuatedHighLevelParam != nullptr);
     attenuatedHighLevelParam->setValueNotifyingHost (attenuatedHighLevelParam->convertTo0to1 (-12.0f));
@@ -151,6 +178,7 @@ TEST_CASE ("Gain staging: 0 dB band level defaults are transparent", "[gain-stag
 {
     TwistYourGutsAudioProcessor processor;
     processor.prepareToPlay (testSampleRate, testBlockSize);
+    neutralizeDynamicsAndVoicing (processor);
 
     // Defaults: lowLevel/highLevel/inputGain/outputGain all 0 dB,
     // outputClip off. A full-band-ish probe (sum of a low and a high tone)
