@@ -7,7 +7,7 @@
 [![CI](https://github.com/yves-vogl/twist-your-guts/actions/workflows/ci.yml/badge.svg)](https://github.com/yves-vogl/twist-your-guts/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-> **Work in progress.** Twist Your Guts is pre-1.0 and under active development (v0.1.0). There are no built binaries or releases yet — building from source is currently the only way to run it. Expect breaking changes until v1.0.0 ships (see [Roadmap](#roadmap)).
+> **Work in progress.** Twist Your Guts is pre-1.0 and under active development (v0.1.0). Binaries for macOS and Windows are available from the [Releases](../../releases) page (currently unsigned — see the release notes); building from source works too. Expect breaking changes until v1.0.0 ships (see [Roadmap](#roadmap)).
 
 ## What it is
 
