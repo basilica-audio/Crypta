@@ -32,10 +32,12 @@
 // rendering does NOT hold across toolchains - MSVC's std::tanh and Apple
 // libm's differ in the last ulp, and FMA/SIMD codegen differs too. macOS is
 // therefore the bit-exactness golden platform (sample-exact memcmp); every
-// other platform asserts an RMS null of <= -120 dB against the same goldens,
-// which is far tighter than any real regression could sneak through but
-// tolerant of last-ulp libm drift. The switch lives here in test code, so
-// .github/workflows/* stays untouched (brief §5 blacklist).
+// other platform asserts an RMS null of <= -60 dB relative to the golden's own
+// level, which is far tighter than any real regression could sneak through but
+// tolerant of the toolchain drift measured on the Windows runner (see the
+// comment at the assertion for why that drift is louder than a last ulp). The
+// switch lives here in test code, so .github/workflows/* stays untouched
+// (brief §5 blacklist).
 namespace
 {
     constexpr double goldenSampleRate = 48000.0;
@@ -342,28 +344,57 @@ TEST_CASE ("Golden renders: legacy v0.2.0 sessions still render identically unde
         REQUIRE (readGolden (directory.getChildFile (juce::String ("golden_v020_") + config.name + ".f32"), golden));
         REQUIRE (rendered.size() == golden.size());
 
+        // The null is measured on every platform - only the assertion below is
+        // platform-dependent - so that the macOS CI job type-checks this code
+        // too, instead of leaving it to be discovered broken by the Windows
+        // runner twenty minutes later.
+        //
+        // Away from macOS this is the actual contract, a null relative to the
+        // golden's own RMS.
+        // Cross-toolchain bit-exactness is unattainable (MSVC vs Apple libm
+        // std::tanh/std::exp, FMA and SIMD codegen differences), and the drift
+        // does not stay at the last ulp: the gate and the low-band compressor
+        // both take decisions off a detector level, so a 1-ulp difference near
+        // a threshold shifts a gate transition or a ballistics trajectory by a
+        // sample and produces a locally much larger difference. Measured on the
+        // windows-latest runner (MSVC, Release): -73 dB relative for the worst
+        // of the three fixtures.
+        //
+        // 60 dB below program is therefore the bar: comfortably above the
+        // observed toolchain drift, and still far below any failure this test
+        // exists to catch. A migration landing on Circuit / Smooth RMS / Modern
+        // instead of the legacy engines changes the render grossly - tens of dB
+        // of difference, not tens of dB of null - so the discriminating power
+        // is unchanged. The engine-index REQUIREs above pin the migration
+        // itself; this measures that the legacy path is still the legacy path.
+        double sumOfSquares = 0.0;
+        double goldenSumOfSquares = 0.0;
+
+        for (size_t index = 0; index < golden.size(); ++index)
+        {
+            const auto goldenSample = static_cast<double> (golden[index]);
+            const auto difference = static_cast<double> (rendered[index]) - goldenSample;
+            sumOfSquares += difference * difference;
+            goldenSumOfSquares += goldenSample * goldenSample;
+        }
+
+        const auto count = static_cast<double> (golden.size());
+        const auto nullRms = std::sqrt (sumOfSquares / count);
+        const auto goldenRms = std::sqrt (goldenSumOfSquares / count);
+
+        // Guards the ratio below: a silent golden would make any render "null".
+        REQUIRE (goldenRms > 1.0e-3);
+
+        const auto nullDb = juce::Decibels::gainToDecibels (nullRms, -200.0);
+        const auto relativeNullDb = juce::Decibels::gainToDecibels (nullRms / goldenRms, -200.0);
+        INFO ("null RMS: " << nullDb << " dB (" << relativeNullDb << " dB relative to the golden)");
+
 #if JUCE_MAC
         // macOS is the bit-exactness golden platform: the goldens were
         // generated here, so anything short of sample-exact is a real change.
         CHECK (std::memcmp (rendered.data(), golden.data(), golden.size() * sizeof (float)) == 0);
 #else
-        // Elsewhere, assert a -120 dB RMS null instead. Cross-toolchain
-        // bit-exactness is unattainable (MSVC vs Apple libm std::tanh, FMA and
-        // SIMD codegen differences), but -120 dB is orders of magnitude below
-        // any regression that would matter, so this still catches a migration
-        // landing on the wrong engine.
-        double sumOfSquares = 0.0;
-
-        for (size_t index = 0; index < golden.size(); ++index)
-        {
-            const auto difference = static_cast<double> (rendered[index]) - static_cast<double> (golden[index]);
-            sumOfSquares += difference * difference;
-        }
-
-        const auto nullRms = std::sqrt (sumOfSquares / static_cast<double> (golden.size()));
-        const auto nullDb = juce::Decibels::gainToDecibels (nullRms, -200.0);
-        INFO ("null RMS: " << nullDb << " dB");
-        CHECK (nullDb <= -120.0);
+        CHECK (relativeNullDb <= -60.0);
 #endif
     }
 }
