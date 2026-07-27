@@ -249,6 +249,24 @@ private:
     std::atomic<float>* irEnabled = nullptr;
     std::atomic<float>* irMixPercent = nullptr;
 
+    // v0.3.0 "circuit-grade bass engine" parameters (see brief §4 /
+    // src/params/ParameterIds.h).
+    std::atomic<float>* driveEngineChoice = nullptr;
+    std::atomic<float>* highBiasPercent = nullptr;
+
+    std::atomic<float>* lowCompDetectorChoice = nullptr;
+    std::atomic<float>* lowCompKneeDb = nullptr;
+    std::atomic<float>* lowCompAutoReleaseFlag = nullptr;
+    std::atomic<float>* lowCompAutoMakeupFlag = nullptr;
+
+    std::atomic<float>* gateModeChoice = nullptr;
+    std::atomic<float>* gateHysteresisDb = nullptr;
+    std::atomic<float>* gateHoldMs = nullptr;
+    std::atomic<float>* gateScHpfHz = nullptr;
+    std::atomic<float>* gateRangeDb = nullptr;
+
+    std::atomic<float>* clipCeilingDb = nullptr;
+
     // The actual parameter object handed back from getBypassParameter() so
     // hosts can offer their own bypass UI/automation for this parameter.
     juce::RangedAudioParameter* bypassParameter = nullptr;

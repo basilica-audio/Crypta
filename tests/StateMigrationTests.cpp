@@ -170,3 +170,116 @@ TEST_CASE ("State migration: never crashes and produces finite output on a legac
     juce::MidiBuffer midi;
     CHECK_NOTHROW (processor.processBlock (buffer, midi));
 }
+
+//==============================================================================
+// v0.2.0 -> v0.3.0 schema migration (brief §4 "State migration plan (schema
+// v1 -> v2)", test plan T10).
+//
+// v0.3.0 adds three engine selectors (driveEngine, lowCompDetector, gateMode)
+// whose APVTS defaults name the NEW circuit-derived engines, so that a fresh
+// instance boots into them. Saved state must not inherit that default: a
+// pre-v0.3.0 session says nothing about these IDs, and replaceState() leaves
+// an unmentioned parameter at its default - which would silently re-voice
+// every existing session. The migration injects the Classic value instead,
+// keyed on the absence of a `stateVersion` attribute on the root element.
+namespace
+{
+    // A choice parameter's *index*, which is what the engine selectors
+    // actually mean (getParam() above returns the normalised-converted plain
+    // value, which for a 2-choice parameter is the index anyway, but going
+    // through getIndex() states the intent).
+    int getChoiceIndex (CryptaAudioProcessor& processor, const char* id)
+    {
+        auto* param = dynamic_cast<juce::AudioParameterChoice*> (processor.apvts.getParameter (id));
+        REQUIRE (param != nullptr);
+        return param->getIndex();
+    }
+
+    constexpr int classicEngineIndex = 0;
+}
+
+TEST_CASE ("State migration v2: a legacy session with no stateVersion gets the Classic engines injected", "[state][migration]")
+{
+    CryptaAudioProcessor processor;
+
+    // Genuine v0.2.0-shaped state: real parameters, no stateVersion, and no
+    // mention whatsoever of the three v0.3.0 engine selectors.
+    const auto block = makeStateBlock ({ { ParamIDs::splitLowHz, 120.0 },
+                                          { ParamIDs::splitHighHz, 600.0 },
+                                          { ParamIDs::highDrive, 70.0 } });
+    processor.setStateInformation (block.getData(), static_cast<int> (block.getSize()));
+
+    CHECK (getChoiceIndex (processor, ParamIDs::driveEngine) == classicEngineIndex);
+    CHECK (getChoiceIndex (processor, ParamIDs::lowCompDetector) == classicEngineIndex);
+    CHECK (getChoiceIndex (processor, ParamIDs::gateMode) == classicEngineIndex);
+
+    // The rest of the legacy state still loads normally.
+    CHECK (getParam (processor, ParamIDs::highDrive) == Catch::Approx (70.0f).margin (0.01));
+}
+
+TEST_CASE ("State migration v2: a v0.1 session gets BOTH the crossover migration and the Classic engines", "[state][migration]")
+{
+    CryptaAudioProcessor processor;
+
+    // v0.1 state: the retired single crossoverFreq, and (being even older)
+    // certainly no engine selectors either. Both migrations must fire.
+    const auto block = makeStateBlock ({ { "crossoverFreq", 250.0 } });
+    processor.setStateInformation (block.getData(), static_cast<int> (block.getSize()));
+
+    CHECK (getParam (processor, ParamIDs::splitHighHz) == Catch::Approx (300.0f).margin (0.01));
+    CHECK (getChoiceIndex (processor, ParamIDs::driveEngine) == classicEngineIndex);
+    CHECK (getChoiceIndex (processor, ParamIDs::lowCompDetector) == classicEngineIndex);
+    CHECK (getChoiceIndex (processor, ParamIDs::gateMode) == classicEngineIndex);
+}
+
+TEST_CASE ("State migration v2: an explicit engine choice in legacy state is never overwritten", "[state][migration]")
+{
+    CryptaAudioProcessor processor;
+
+    // Defensive path, mirroring the crossover migration's own guard: a
+    // hand-edited or forward-ported file that DOES name an engine is taken at
+    // its word, and only the genuinely missing IDs are injected.
+    const auto block = makeStateBlock ({ { ParamIDs::driveEngine, 1.0 } });
+    processor.setStateInformation (block.getData(), static_cast<int> (block.getSize()));
+
+    CHECK (getChoiceIndex (processor, ParamIDs::driveEngine) == 1); // Circuit, as stated
+    CHECK (getChoiceIndex (processor, ParamIDs::lowCompDetector) == classicEngineIndex);
+    CHECK (getChoiceIndex (processor, ParamIDs::gateMode) == classicEngineIndex);
+}
+
+TEST_CASE ("State migration v2: state saved by v0.3.0 round-trips with stateVersion=2 and all 51 parameters", "[state][migration]")
+{
+    CryptaAudioProcessor source;
+
+    // Deliberately choose the NEW engines and save.
+    const auto setChoice = [&source] (const char* id, int index)
+    {
+        auto* param = dynamic_cast<juce::AudioParameterChoice*> (source.apvts.getParameter (id));
+        REQUIRE (param != nullptr);
+        param->setValueNotifyingHost (param->convertTo0to1 (static_cast<float> (index)));
+    };
+
+    setChoice (ParamIDs::driveEngine, 1);
+    setChoice (ParamIDs::lowCompDetector, 1);
+    setChoice (ParamIDs::gateMode, 1);
+
+    juce::MemoryBlock block;
+    source.getStateInformation (block);
+
+    const std::unique_ptr<juce::XmlElement> xml (
+        juce::AudioProcessor::getXmlFromBinary (block.getData(), static_cast<int> (block.getSize())));
+    REQUIRE (xml != nullptr);
+
+    // The version marker itself, and the full parameter set.
+    CHECK (xml->getIntAttribute ("stateVersion") == 2);
+    CHECK (xml->getNumChildElements() == 51);
+
+    // Round-trip: because the state IS versioned, the migration must NOT fire
+    // and must not drag the engines back to Classic.
+    CryptaAudioProcessor destination;
+    destination.setStateInformation (block.getData(), static_cast<int> (block.getSize()));
+
+    CHECK (getChoiceIndex (destination, ParamIDs::driveEngine) == 1);
+    CHECK (getChoiceIndex (destination, ParamIDs::lowCompDetector) == 1);
+    CHECK (getChoiceIndex (destination, ParamIDs::gateMode) == 1);
+}

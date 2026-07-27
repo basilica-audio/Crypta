@@ -291,3 +291,127 @@ TEST_CASE ("Golden renders: the committed v0.2.0 fixtures exist and are well-for
         REQUIRE (golden.size() == static_cast<size_t> (goldenNumChannels * goldenNumSamples));
     }
 }
+
+TEST_CASE ("Golden renders: legacy v0.2.0 sessions still render identically under v0.3.0", "[state][migration][golden]")
+{
+    // The headline migration contract (brief T10(b)): load genuine v0.2.0
+    // state, render, and compare against what v0.2.0 itself produced. If the
+    // engine migration ever stops injecting Classic/Classic Peak/Classic -
+    // or if a "Classic path preserved verbatim" refactor is not actually
+    // verbatim - this is the test that fails.
+    const auto directory = fixturesDirectory();
+
+    for (const auto& config : goldenConfigs())
+    {
+        // The clip-on fixture is the documented exception (brief §4 step 4a):
+        // v0.3.0 deliberately replaces the raw base-rate tanh with a
+        // delta-form ADAA ceiling clip. It gets its own looser contract in the
+        // next test case rather than bit-exactness.
+        if (config.outputClip)
+            continue;
+
+        INFO ("fixture: " << config.name);
+
+        const auto stateFile = directory.getChildFile (juce::String ("state_v020_") + config.name + ".xml");
+        const std::unique_ptr<juce::XmlElement> stateXml (juce::XmlDocument::parse (stateFile));
+        REQUIRE (stateXml != nullptr);
+
+        juce::MemoryBlock stateBlock;
+        juce::AudioProcessor::copyXmlToBinary (*stateXml, stateBlock);
+
+        CryptaAudioProcessor processor;
+        processor.setStateInformation (stateBlock.getData(), static_cast<int> (stateBlock.getSize()));
+
+        // Sanity: the migration really did fire on this fixture. Without
+        // this, a bug that made the fixtures look v0.3.0-shaped would turn
+        // the comparison below into a tautology.
+        const auto engineIndex = [&processor] (const char* id)
+        {
+            auto* choice = dynamic_cast<juce::AudioParameterChoice*> (processor.apvts.getParameter (id));
+            REQUIRE (choice != nullptr);
+            return choice->getIndex();
+        };
+
+        REQUIRE (engineIndex (ParamIDs::driveEngine) == 0);
+        REQUIRE (engineIndex (ParamIDs::lowCompDetector) == 0);
+        REQUIRE (engineIndex (ParamIDs::gateMode) == 0);
+
+        const auto rendered = flatten (renderGolden (processor));
+
+        std::vector<float> golden;
+        REQUIRE (readGolden (directory.getChildFile (juce::String ("golden_v020_") + config.name + ".f32"), golden));
+        REQUIRE (rendered.size() == golden.size());
+
+#if JUCE_MAC
+        // macOS is the bit-exactness golden platform: the goldens were
+        // generated here, so anything short of sample-exact is a real change.
+        CHECK (std::memcmp (rendered.data(), golden.data(), golden.size() * sizeof (float)) == 0);
+#else
+        // Elsewhere, assert a -120 dB RMS null instead. Cross-toolchain
+        // bit-exactness is unattainable (MSVC vs Apple libm std::tanh, FMA and
+        // SIMD codegen differences), but -120 dB is orders of magnitude below
+        // any regression that would matter, so this still catches a migration
+        // landing on the wrong engine.
+        double sumOfSquares = 0.0;
+
+        for (size_t index = 0; index < golden.size(); ++index)
+        {
+            const auto difference = static_cast<double> (rendered[index]) - static_cast<double> (golden[index]);
+            sumOfSquares += difference * difference;
+        }
+
+        const auto nullRms = std::sqrt (sumOfSquares / static_cast<double> (golden.size()));
+        const auto nullDb = juce::Decibels::gainToDecibels (nullRms, -200.0);
+        INFO ("null RMS: " << nullDb << " dB");
+        CHECK (nullDb <= -120.0);
+#endif
+    }
+}
+
+TEST_CASE ("Golden renders: the engaged safety clip stays within its documented -40 dB null", "[state][migration][golden]")
+{
+    // Brief §4 step 4(a) / T10(c): with the safety clip ENGAGED, v0.3.0 is
+    // deliberately not bit-identical to v0.2.0 - the raw base-rate std::tanh
+    // is replaced by a delta-form ADAA ceiling clip, which is a documented
+    // defect fix (less aliasing, and transparent below the ceiling instead of
+    // colouring everything). The contract is a bounded difference, not zero:
+    // differences are confined to the clipped / soft-knee region.
+    const auto directory = fixturesDirectory();
+
+    const auto stateFile = directory.getChildFile ("state_v020_gnaw_clip.xml");
+    const std::unique_ptr<juce::XmlElement> stateXml (juce::XmlDocument::parse (stateFile));
+    REQUIRE (stateXml != nullptr);
+
+    juce::MemoryBlock stateBlock;
+    juce::AudioProcessor::copyXmlToBinary (*stateXml, stateBlock);
+
+    CryptaAudioProcessor processor;
+    processor.setStateInformation (stateBlock.getData(), static_cast<int> (stateBlock.getSize()));
+
+    const auto rendered = flatten (renderGolden (processor));
+
+    std::vector<float> golden;
+    REQUIRE (readGolden (directory.getChildFile ("golden_v020_gnaw_clip.f32"), golden));
+    REQUIRE (rendered.size() == golden.size());
+
+    double differenceSquares = 0.0;
+    double goldenSquares = 0.0;
+
+    for (size_t index = 0; index < golden.size(); ++index)
+    {
+        const auto difference = static_cast<double> (rendered[index]) - static_cast<double> (golden[index]);
+        differenceSquares += difference * difference;
+        goldenSquares += static_cast<double> (golden[index]) * static_cast<double> (golden[index]);
+    }
+
+    const auto count = static_cast<double> (golden.size());
+    const auto nullDb = juce::Decibels::gainToDecibels (std::sqrt (differenceSquares / count), -200.0);
+    const auto signalDb = juce::Decibels::gainToDecibels (std::sqrt (goldenSquares / count), -200.0);
+
+    INFO ("null RMS: " << nullDb << " dB, signal RMS: " << signalDb << " dB");
+
+    // Relative to the programme, not absolute - the fixture is rendered hot
+    // (+12 dB output trim) precisely so the clipper is doing real work.
+    CHECK ((nullDb - signalDb) <= -40.0);
+    CHECK (std::isfinite (nullDb));
+}

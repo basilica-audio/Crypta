@@ -67,6 +67,57 @@ namespace
     }
 
     //==========================================================================
+    // v0.2.0 -> v0.3.0 state schema migration (brief §4, "State migration
+    // plan (schema v1 -> v2)").
+    //
+    // v0.3.0 adds three engine selectors whose APVTS defaults name the NEW
+    // circuit-derived engines, so that a genuinely fresh instance boots into
+    // them. Saved state must not inherit that: a v0.1/v0.2 session says
+    // nothing about driveEngine/lowCompDetector/gateMode, and
+    // APVTS::replaceState() leaves an unmentioned parameter at its (new)
+    // default - which would silently change the sound of every existing
+    // session. Injecting the legacy value for exactly those three IDs is what
+    // keeps old sessions bit-identical.
+    //
+    // The marker is a `stateVersion` attribute on the APVTS root element.
+    // Attributes survive the copyState()/createXml() round-trip, and a v0.2.0
+    // reader ignores an attribute it does not know, so writing it costs no
+    // backward compatibility.
+    constexpr const char* stateVersionAttribute = "stateVersion";
+    constexpr int currentStateVersion = 2;
+
+    // Index of the legacy (v0.2.0-equivalent) option in each engine selector's
+    // choice list - "Classic", "Classic Peak" and "Classic" respectively, all
+    // of which are element 0 (see src/params/ParameterLayout.cpp).
+    constexpr double legacyEngineChoiceIndex = 0.0;
+
+    void injectLegacyEngineParam (juce::XmlElement& stateXml, const char* parameterId)
+    {
+        // Defensive in the same way migrateLegacySingleCrossover() is: never
+        // overwrite a value that is already explicitly present, even in a
+        // hand-edited or malformed file.
+        if (stateXml.getChildByAttribute ("id", parameterId) != nullptr)
+            return;
+
+        auto* paramXml = new juce::XmlElement ("PARAM");
+        paramXml->setAttribute ("id", parameterId);
+        paramXml->setAttribute ("value", legacyEngineChoiceIndex);
+        stateXml.addChildElement (paramXml);
+    }
+
+    void migrateToStateV2 (juce::XmlElement& stateXml)
+    {
+        // Any state carrying a stateVersion is v0.3.0-or-later and already
+        // says what it means about the engines - leave it alone.
+        if (stateXml.hasAttribute (stateVersionAttribute))
+            return;
+
+        injectLegacyEngineParam (stateXml, ParamIDs::driveEngine);
+        injectLegacyEngineParam (stateXml, ParamIDs::lowCompDetector);
+        injectLegacyEngineParam (stateXml, ParamIDs::gateMode);
+    }
+
+    //==========================================================================
     // M2 preset system (.scaffold/specs/preset-system-m2.md,
     // docs/preset-system-notes.md's replication recipe from basilica-audio/
     // nave's pilot). The small, Crypta-specific config surface
@@ -87,6 +138,24 @@ namespace
         // userPresetsDirectoryOverrideForTests intentionally left
         // default-constructed (empty) - production instances always use the
         // real platform-standard preset location (see PresetManager.h).
+
+        // Preset-path half of the v0.3.0 engine migration (brief §4 step 3).
+        // The session path is migrateToStateV2() above; this is the same idea
+        // for presets, which never go through setStateInformation().
+        //
+        // Without this, a v0.1/v0.2 user preset - which cannot name the three
+        // engine selectors - would pick up their new Circuit/Smooth RMS/
+        // Modern defaults from applyParsedPreset()'s reset-then-apply, and a
+        // user's tuned preset would quietly change character. It also covers
+        // the user-saved "Default" that shadows the factory one, which is the
+        // preset a fresh session of an existing user actually boots into.
+        config.legacyParameterCutoffVersion = "0.3.0";
+        config.legacyParameterDefaults = {
+            { ParamIDs::driveEngine, 0.0f },     // Classic
+            { ParamIDs::lowCompDetector, 0.0f }, // Classic Peak
+            { ParamIDs::gateMode, 0.0f },        // Classic
+        };
+
         return config;
     }
 
@@ -167,6 +236,22 @@ CryptaAudioProcessor::CryptaAudioProcessor()
     irEnabled = apvts.getRawParameterValue (ParamIDs::irEnabled);
     irMixPercent = apvts.getRawParameterValue (ParamIDs::irMix);
 
+    driveEngineChoice = apvts.getRawParameterValue (ParamIDs::driveEngine);
+    highBiasPercent = apvts.getRawParameterValue (ParamIDs::highBias);
+
+    lowCompDetectorChoice = apvts.getRawParameterValue (ParamIDs::lowCompDetector);
+    lowCompKneeDb = apvts.getRawParameterValue (ParamIDs::lowCompKnee);
+    lowCompAutoReleaseFlag = apvts.getRawParameterValue (ParamIDs::lowCompAutoRelease);
+    lowCompAutoMakeupFlag = apvts.getRawParameterValue (ParamIDs::lowCompAutoMakeup);
+
+    gateModeChoice = apvts.getRawParameterValue (ParamIDs::gateMode);
+    gateHysteresisDb = apvts.getRawParameterValue (ParamIDs::gateHysteresis);
+    gateHoldMs = apvts.getRawParameterValue (ParamIDs::gateHold);
+    gateScHpfHz = apvts.getRawParameterValue (ParamIDs::gateScHpf);
+    gateRangeDb = apvts.getRawParameterValue (ParamIDs::gateRange);
+
+    clipCeilingDb = apvts.getRawParameterValue (ParamIDs::clipCeiling);
+
     jassert (inputGainDb != nullptr);
     jassert (outputGainDb != nullptr);
     jassert (bypassFlag != nullptr);
@@ -213,6 +298,22 @@ CryptaAudioProcessor::CryptaAudioProcessor()
 
     jassert (irEnabled != nullptr);
     jassert (irMixPercent != nullptr);
+
+    jassert (driveEngineChoice != nullptr);
+    jassert (highBiasPercent != nullptr);
+
+    jassert (lowCompDetectorChoice != nullptr);
+    jassert (lowCompKneeDb != nullptr);
+    jassert (lowCompAutoReleaseFlag != nullptr);
+    jassert (lowCompAutoMakeupFlag != nullptr);
+
+    jassert (gateModeChoice != nullptr);
+    jassert (gateHysteresisDb != nullptr);
+    jassert (gateHoldMs != nullptr);
+    jassert (gateScHpfHz != nullptr);
+    jassert (gateRangeDb != nullptr);
+
+    jassert (clipCeilingDb != nullptr);
 
     // M2 default resolution: user "Default" preset > factory "Default"
     // preset > the ParameterLayout defaults apvts was just constructed with
@@ -652,6 +753,13 @@ void CryptaAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     const auto state = apvts.copyState();
     const std::unique_ptr<juce::XmlElement> xml (state.createXml());
+
+    // Stamp the schema version so setStateInformation() can tell state that
+    // predates the v0.3.0 engine selectors (and therefore needs the legacy
+    // engines injected) from state that simply chose them - see
+    // migrateToStateV2() above.
+    xml->setAttribute (stateVersionAttribute, currentStateVersion);
+
     copyXmlToBinary (*xml, destData);
 }
 
@@ -667,6 +775,14 @@ void CryptaAudioProcessor::setStateInformation (const void* data, int sizeInByte
     // v0.2.0+ saved state (it never contains a "crossoverFreq" element).
     migrateLegacySingleCrossover (*xmlState);
 
+    // v0.2.0 -> v0.3.0 engine migration. Runs after the crossover migration
+    // above so a v0.1 session gets both, in schema order.
+    migrateToStateV2 (*xmlState);
+
+    // The stateVersion attribute lives on the XML element, not in the
+    // ValueTree's parameter children, so it is not carried into the APVTS
+    // state - it is purely a serialisation-format marker, re-stamped on every
+    // getStateInformation().
     apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
 }
 

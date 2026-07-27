@@ -60,6 +60,38 @@ namespace basilica::presets
         // leaves this default-constructed (empty), so production instances
         // always use the real per-user preset location.
         juce::File userPresetsDirectoryOverrideForTests;
+
+        //======================================================================
+        // Legacy-parameter back-fill (added for Crypta v0.3.0; generic, and
+        // empty-by-default so every other plugin in the suite is unaffected).
+        //
+        // The problem this solves: applyParsedPreset() deliberately calls
+        // resetAllParametersToDefault() before applying a preset's values, so
+        // that a sparse preset is fully deterministic. When a new plugin
+        // version adds a parameter whose *default* selects new behaviour,
+        // that reset makes every older preset - which cannot mention the new
+        // parameter - silently adopt the new behaviour on load.
+        //
+        // Listing such a parameter here back-fills the value that reproduces
+        // the old behaviour, but ONLY for presets that predate
+        // `legacyParameterCutoffVersion` and do not already mention it. A
+        // preset saved at or after the cutoff is trusted to mean what it says
+        // and is never overridden.
+        //
+        // This is a read-side default-fill. It does not change the preset
+        // JSON schema: no new keys, no format-tag change, and
+        // parseAndValidate()'s contract is untouched.
+        struct LegacyParameterDefault
+        {
+            juce::String parameterId;
+            float plainValue;
+        };
+
+        // Semantic version, e.g. "0.3.0". Empty disables the back-fill
+        // entirely (the default for every plugin that does not need it).
+        juce::String legacyParameterCutoffVersion;
+
+        std::vector<LegacyParameterDefault> legacyParameterDefaults;
     };
 
     // Owns preset discovery (factory presets, embedded via BinaryData at
@@ -211,6 +243,13 @@ namespace basilica::presets
 
         void resetAllParametersToDefault();
         void applyPlainValues (const juce::var& parametersObject);
+
+        // Applies config.legacyParameterDefaults to a preset that predates
+        // config.legacyParameterCutoffVersion - see the config field's docs.
+        // No-op when the back-fill is unconfigured, when the preset is new
+        // enough, or (per parameter) when the preset already sets it.
+        void applyLegacyParameterDefaults (const juce::var& parsed) const;
+
         void applyParsedPreset (const juce::var& parsed, const juce::String& name, bool isFactory);
         juce::var buildPresetVar (const juce::String& name, const juce::String& category) const;
         bool writePresetVarToFile (const juce::var& presetVar, const juce::File& destination) const;

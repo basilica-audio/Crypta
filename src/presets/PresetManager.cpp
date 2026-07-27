@@ -32,6 +32,39 @@ namespace basilica::presets
         {
             return juce::File::createLegalFileName (name);
         }
+
+        // Compares two dotted numeric version strings component-wise, padding
+        // the shorter with zeros ("0.3" == "0.3.0"). Non-numeric trailers are
+        // ignored by getIntValue()'s leading-digits parse, so "0.3.0-rc1"
+        // compares equal to "0.3.0" - deliberately lenient: this only gates a
+        // compatibility back-fill, and treating a pre-release as its release
+        // is the safer of the two mistakes.
+        //
+        // Returns true when `candidate` is strictly older than `reference`.
+        // An empty/absent candidate counts as older than anything, which is
+        // exactly what an ancient preset with no pluginVersion key should be.
+        bool isVersionOlderThan (const juce::String& candidate, const juce::String& reference)
+        {
+            if (candidate.isEmpty())
+                return true;
+
+            juce::StringArray candidateParts, referenceParts;
+            candidateParts.addTokens (candidate, ".", {});
+            referenceParts.addTokens (reference, ".", {});
+
+            const auto numParts = juce::jmax (candidateParts.size(), referenceParts.size());
+
+            for (int part = 0; part < numParts; ++part)
+            {
+                const auto candidateValue = part < candidateParts.size() ? candidateParts[part].getIntValue() : 0;
+                const auto referenceValue = part < referenceParts.size() ? referenceParts[part].getIntValue() : 0;
+
+                if (candidateValue != referenceValue)
+                    return candidateValue < referenceValue;
+            }
+
+            return false;
+        }
     }
 
     //==========================================================================
@@ -120,6 +153,43 @@ namespace basilica::presets
         }
     }
 
+    void PresetManager::applyLegacyParameterDefaults (const juce::var& parsed) const
+    {
+        if (config.legacyParameterCutoffVersion.isEmpty() || config.legacyParameterDefaults.empty())
+            return;
+
+        auto* obj = parsed.getDynamicObject();
+
+        if (obj == nullptr)
+            return;
+
+        const auto presetVersion = obj->getProperty (pluginVersionKey).toString();
+
+        // A preset saved at or after the cutoff means what it says about
+        // these parameters, even if it happens to omit one.
+        if (! isVersionOlderThan (presetVersion, config.legacyParameterCutoffVersion))
+            return;
+
+        auto* parametersObj = obj->getProperty (parametersKey).getDynamicObject();
+
+        if (parametersObj == nullptr)
+            return;
+
+        for (const auto& legacy : config.legacyParameterDefaults)
+        {
+            // Never override an explicit value: a legacy preset that somehow
+            // does name the parameter (hand-edited, or forward-ported) is
+            // taken at its word.
+            if (parametersObj->hasProperty (legacy.parameterId))
+                continue;
+
+            auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (apvts.getParameter (legacy.parameterId));
+
+            if (ranged != nullptr)
+                ranged->setValueNotifyingHost (ranged->convertTo0to1 (legacy.plainValue));
+        }
+    }
+
     void PresetManager::applyParsedPreset (const juce::var& parsed, const juce::String& name, bool isFactory)
     {
         applyingPreset.store (true, std::memory_order_relaxed);
@@ -128,6 +198,11 @@ namespace basilica::presets
 
         auto* obj = parsed.getDynamicObject();
         jassert (obj != nullptr); // parseAndValidate() guarantees this
+
+        // Back-fill legacy values BEFORE the preset's own values are applied,
+        // so an explicit value in the preset always wins (belt-and-braces:
+        // applyLegacyParameterDefaults() already skips keys the preset sets).
+        applyLegacyParameterDefaults (parsed);
 
         applyPlainValues (obj->getProperty (parametersKey));
 

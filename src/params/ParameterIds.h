@@ -91,4 +91,36 @@ namespace ParamIDs
     // handled separately in M4)
     inline constexpr auto irEnabled = "irEnabled";
     inline constexpr auto irMix = "irMix";
+
+    //==============================================================================
+    // v0.3.0 "circuit-grade bass engine" additions (12 IDs, 39 -> 51 total).
+    //
+    // Three of these are engine selectors (driveEngine, lowCompDetector,
+    // gateMode). Their APVTS defaults name the NEW circuit-derived engines,
+    // because that is what a genuinely fresh instance should boot into - but
+    // every pre-v0.3.0 session and every pre-v0.3.0 preset gets the legacy
+    // value injected on load, so no existing session or preset ever changes
+    // its sound. See CryptaAudioProcessor::migrateToStateV2() for the session
+    // path and PresetManager's legacy engine injection for the preset path.
+    //
+    // The remaining nine are parameters of those new engines. Several carry
+    // deliberately non-neutral defaults (knee 6 dB, hysteresis 4 dB, hold
+    // 20 ms, gate sidechain highpass 80 Hz, range 60 dB): that is safe
+    // precisely because they are unread unless the corresponding engine
+    // selector is on its new value, which legacy state never selects.
+    inline constexpr auto driveEngine = "driveEngine";
+    inline constexpr auto highBias = "highBias";
+
+    inline constexpr auto lowCompDetector = "lowCompDetector";
+    inline constexpr auto lowCompKnee = "lowCompKnee";
+    inline constexpr auto lowCompAutoRelease = "lowCompAutoRelease";
+    inline constexpr auto lowCompAutoMakeup = "lowCompAutoMakeup";
+
+    inline constexpr auto gateMode = "gateMode";
+    inline constexpr auto gateHysteresis = "gateHysteresis";
+    inline constexpr auto gateHold = "gateHold";
+    inline constexpr auto gateScHpf = "gateScHpf";
+    inline constexpr auto gateRange = "gateRange";
+
+    inline constexpr auto clipCeiling = "clipCeiling";
 }
