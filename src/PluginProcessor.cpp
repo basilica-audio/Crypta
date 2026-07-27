@@ -435,6 +435,19 @@ void CryptaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     highVoicing.prepare (spec, highBlendPercent->load (std::memory_order_relaxed) / 100.0f);
     highVoicing.setTightHz (highTightHzParam->load (std::memory_order_relaxed));
 
+    // v0.3.0 Circuit engine. Always prepared, whichever engine is currently
+    // selected, so that switching is a branch rather than an allocation - and
+    // so the crossfade can render both.
+    circuitDrive.prepare (spec);
+    circuitDrive.setSplitHighHz (cryp::clampSplitHighHz (splitLowHzParam->load (std::memory_order_relaxed),
+                                                          splitHighHzParam->load (std::memory_order_relaxed)));
+    circuitDrive.setHighTightHz (highTightHzParam->load (std::memory_order_relaxed));
+
+    // Seed the engine-change detector so the very first block after
+    // prepareToPlay() is not mistaken for a switch.
+    lastDriveEngineWasCircuit = driveEngineChoice->load (std::memory_order_relaxed) >= 0.5f;
+    engineCrossfadeRemaining = 0;
+
     // Per-band level trims, smoothed the same way as the input/output gains
     // to avoid zipper noise on automation.
     lowGainProcessor.setRampDurationSeconds (gainRampDurationSeconds);
@@ -463,6 +476,11 @@ void CryptaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     lowBandLatencyDelay.setMaximumDelayInSamples (maxLatencyCompensationSamples);
     lowBandLatencyDelay.prepare (spec);
 
+    // Same contract for the Circuit-path alignment delay (see its docs in
+    // PluginProcessor.h): allocation happens here, never in processBlock().
+    circuitAlignDelay.setMaximumDelayInSamples (maxLatencyCompensationSamples);
+    circuitAlignDelay.prepare (spec);
+
     // Pre-allocate every band/scratch buffer to the promised block size so
     // processBlock() never resizes a buffer on the audio thread, even if a
     // host later sends an oversized block (handled defensively by chunking
@@ -473,6 +491,7 @@ void CryptaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     midBandBuffer.setSize (static_cast<int> (spec.numChannels), preparedBlockSize);
     highBandBuffer.setSize (static_cast<int> (spec.numChannels), preparedBlockSize);
     midHighSumBuffer.setSize (static_cast<int> (spec.numChannels), preparedBlockSize);
+    engineCrossfadeBuffer.setSize (static_cast<int> (spec.numChannels), preparedBlockSize);
 
     updateLatencyCompensation();
 }
@@ -488,7 +507,14 @@ int CryptaAudioProcessor::computeTotalLatencySamples() const noexcept
     // equal by construction (same factor/filter type - see MidBand.h's
     // class docs), but jmax() here is a defensive, self-documenting
     // guarantee rather than relying on that equality silently holding.
-    return juce::jmax (midBand.getLatencySamples(), highVoicing.getLatencySamples());
+    // v0.3.0 adds a third contributor: the Circuit engine's own shared
+    // oversampling region. Taking the maximum across BOTH engines (rather
+    // than the currently-selected one) is what makes the reported latency
+    // depend only on the sample rate, so switching driveEngine never has to
+    // re-report latency to the host - see circuitAlignDelay's docs in
+    // PluginProcessor.h.
+    return juce::jmax (midBand.getLatencySamples(),
+                        juce::jmax (highVoicing.getLatencySamples(), circuitDrive.getLatencySamples()));
 }
 
 void CryptaAudioProcessor::updateLatencyCompensation()
@@ -496,6 +522,13 @@ void CryptaAudioProcessor::updateLatencyCompensation()
     const auto totalLatencySamples = juce::jlimit (0, maxLatencyCompensationSamples, computeTotalLatencySamples());
 
     setLatencySamples (totalLatencySamples);
+
+    // Pad the Circuit path up to the reported total. Zero whenever the two
+    // engines already agree (every rate at or below 50 kHz, where both run
+    // 4x), non-zero at 88.2 kHz and above.
+    circuitAlignDelay.setMaximumDelayInSamples (maxLatencyCompensationSamples);
+    circuitAlignDelay.setDelay (static_cast<float> (
+        juce::jlimit (0, maxLatencyCompensationSamples, totalLatencySamples - circuitDrive.getLatencySamples())));
 
     // The low band bypasses oversampling entirely, so it must be delayed by
     // the same amount the Mid+High branch's oversampling stages delay it,
@@ -526,6 +559,8 @@ void CryptaAudioProcessor::reset()
     lowCompressor.reset();
     midBand.reset();
     highVoicing.reset();
+    circuitDrive.reset();
+    engineCrossfadeRemaining = 0;
 
     lowGainProcessor.reset();
     midGainProcessor.reset();
@@ -535,6 +570,7 @@ void CryptaAudioProcessor::reset()
     irLoader.reset();
 
     lowBandLatencyDelay.reset();
+    circuitAlignDelay.reset();
 }
 
 bool CryptaAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -610,6 +646,21 @@ void CryptaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     highVoicing.setTone (highTonePercent->load (std::memory_order_relaxed) / 100.0f);
     highVoicing.setWetMixProportion (highBlendPercent->load (std::memory_order_relaxed) / 100.0f);
 
+    // Circuit engine reads the same user-facing controls as Classic, plus the
+    // two per-band level trims (which it applies internally, because its Mid
+    // and High bands only exist inside its own oversampled region and are
+    // summed before they come back out).
+    circuitDrive.setSplitHighHz (effectiveSplitHighHz);
+    circuitDrive.setMidDrive (midDrivePercent->load (std::memory_order_relaxed) / 100.0f);
+    circuitDrive.setVoicing (static_cast<cryp::VoicingType> (juce::jlimit (0, 2, voicingIndex)));
+    circuitDrive.setHighDrive (highDrivePercent->load (std::memory_order_relaxed) / 100.0f);
+    circuitDrive.setHighTone (highTonePercent->load (std::memory_order_relaxed) / 100.0f);
+    circuitDrive.setHighTightHz (highTightHzParam->load (std::memory_order_relaxed));
+    circuitDrive.setHighBlend (highBlendPercent->load (std::memory_order_relaxed) / 100.0f);
+    circuitDrive.setHighBias (highBiasPercent->load (std::memory_order_relaxed) / 100.0f);
+    circuitDrive.setMidLevelDb (midLevelDb->load (std::memory_order_relaxed));
+    circuitDrive.setHighLevelDb (highLevelDb->load (std::memory_order_relaxed));
+
     eq.setLowShelf (eqLowShelfFreqHz->load (std::memory_order_relaxed), eqLowShelfGainDb->load (std::memory_order_relaxed));
     eq.setPeak1 (eqPeak1FreqHz->load (std::memory_order_relaxed), eqPeak1GainDb->load (std::memory_order_relaxed), eqPeak1Q->load (std::memory_order_relaxed));
     eq.setPeak2 (eqPeak2FreqHz->load (std::memory_order_relaxed), eqPeak2GainDb->load (std::memory_order_relaxed), eqPeak2Q->load (std::memory_order_relaxed));
@@ -653,11 +704,8 @@ void CryptaAudioProcessor::processChunk (juce::dsp::AudioBlock<float>& chunk) no
     auto midHighSumBlock = juce::dsp::AudioBlock<float> (midHighSumBuffer).getSubBlock (0, numSamples).getSubsetChannelBlock (0, numChannels);
 
     // Split #1: peel off the Low band; the remainder carries the Mid+High
-    // content on to split #2.
+    // content on to the selected drive engine.
     lowSplit.process (chunk, lowBlock, remainderBlock);
-
-    // Split #2: remainder -> Mid / High.
-    midHighSplit.process (remainderBlock, midBlock, highBlock);
 
     // Low band: parallel compressor, then level trim, then the v0.2.0
     // phase-alignment allpass that makes the cascaded three-way sum flat
@@ -677,24 +725,59 @@ void CryptaAudioProcessor::processChunk (juce::dsp::AudioBlock<float>& chunk) no
             lowBandIsolationCaptureForTests->copyFrom (
                 static_cast<int> (channel), 0, lowBlock.getChannelPointer (channel), static_cast<int> (numSamples));
 
-    // Mid band: staged drive, then level trim.
-    midBand.process (midBlock);
-    midGainProcessor.process (juce::dsp::ProcessContextReplacing<float> (midBlock));
+    // Mid+High section, through whichever drive engine is selected.
+    //
+    // A change of engine arms a short equal-power crossfade, during which
+    // BOTH engines run and are faded between - the two produce genuinely
+    // different signals, so simply swapping branches would step the output.
+    const auto useCircuitEngine = driveEngineChoice->load (std::memory_order_relaxed) >= 0.5f;
 
-    // High band: Tight pre-drive HPF (inside Voicing) -> oversampled
-    // distortion voicing (Gnaw/Wool/Razor) -> drive -> tone -> blend, then
-    // level trim. This (together with Mid band's own oversampling) is the
-    // only source of latency in the chain.
-    highVoicing.process (highBlock);
-    highGainProcessor.process (juce::dsp::ProcessContextReplacing<float> (highBlock));
+    if (useCircuitEngine != lastDriveEngineWasCircuit)
+    {
+        engineCrossfadeRemaining = engineCrossfadeLengthSamples;
+        lastDriveEngineWasCircuit = useCircuitEngine;
+    }
+
+    if (engineCrossfadeRemaining > 0)
+    {
+        auto crossfadeBlock = juce::dsp::AudioBlock<float> (engineCrossfadeBuffer)
+                                  .getSubBlock (0, numSamples)
+                                  .getSubsetChannelBlock (0, numChannels);
+
+        // Both engines consume the same input, so one of them needs its own
+        // copy of the remainder.
+        crossfadeBlock.copyFrom (juce::dsp::AudioBlock<const float> (remainderBlock));
+
+        if (useCircuitEngine)
+        {
+            processMidHighCircuit (remainderBlock);
+            processMidHighClassic (juce::dsp::AudioBlock<const float> (crossfadeBlock), midHighSumBlock);
+            applyEngineCrossfade (juce::dsp::AudioBlock<const float> (midHighSumBlock),
+                                   juce::dsp::AudioBlock<const float> (remainderBlock),
+                                   midHighSumBlock);
+        }
+        else
+        {
+            processMidHighClassic (juce::dsp::AudioBlock<const float> (remainderBlock), midHighSumBlock);
+            processMidHighCircuit (crossfadeBlock);
+            applyEngineCrossfade (juce::dsp::AudioBlock<const float> (crossfadeBlock),
+                                   juce::dsp::AudioBlock<const float> (midHighSumBlock),
+                                   midHighSumBlock);
+        }
+    }
+    else if (useCircuitEngine)
+    {
+        processMidHighCircuit (remainderBlock);
+        midHighSumBlock.copyFrom (juce::dsp::AudioBlock<const float> (remainderBlock));
+    }
+    else
+    {
+        processMidHighClassic (juce::dsp::AudioBlock<const float> (remainderBlock), midHighSumBlock);
+    }
 
     // Issue #9: time-align the low band with the latency the Mid+High
     // branch's oversampling stages introduce.
     lowBandLatencyDelay.process (juce::dsp::ProcessContextReplacing<float> (lowBlock));
-
-    // Sum Mid + High into a dedicated buffer (never aliasing either addend)
-    // ahead of the relocated IR loader.
-    midHighSumBlock.replaceWithSumOf (midBlock, highBlock);
 
     // Cab-sim IR loader (v0.2.0: relocated here, between the Mid+High sum
     // and the final three-way sum) - the Low band structurally never passes
@@ -729,6 +812,72 @@ void CryptaAudioProcessor::processChunk (juce::dsp::AudioBlock<float>& chunk) no
     }
 
     outputGainProcessor.process (juce::dsp::ProcessContextReplacing<float> (chunk));
+}
+
+void CryptaAudioProcessor::processMidHighClassic (const juce::dsp::AudioBlock<const float>& input,
+                                                    juce::dsp::AudioBlock<float>& output) noexcept
+{
+    const auto numChannels = output.getNumChannels();
+    const auto numSamples = output.getNumSamples();
+
+    auto midBlock = juce::dsp::AudioBlock<float> (midBandBuffer).getSubBlock (0, numSamples).getSubsetChannelBlock (0, numChannels);
+    auto highBlock = juce::dsp::AudioBlock<float> (highBandBuffer).getSubBlock (0, numSamples).getSubsetChannelBlock (0, numChannels);
+
+    // Split #2: remainder -> Mid / High, at base rate.
+    midHighSplit.process (input, midBlock, highBlock);
+
+    // Mid band: staged drive, then level trim.
+    midBand.process (midBlock);
+    midGainProcessor.process (juce::dsp::ProcessContextReplacing<float> (midBlock));
+
+    // High band: Tight pre-drive HPF (inside Voicing) -> oversampled
+    // distortion voicing (Gnaw/Wool/Razor) -> drive -> tone -> blend, then
+    // level trim.
+    highVoicing.process (highBlock);
+    highGainProcessor.process (juce::dsp::ProcessContextReplacing<float> (highBlock));
+
+    // Sum Mid + High into a dedicated buffer (never aliasing either addend)
+    // ahead of the relocated IR loader.
+    output.replaceWithSumOf (juce::dsp::AudioBlock<const float> (midBlock),
+                              juce::dsp::AudioBlock<const float> (highBlock));
+}
+
+void CryptaAudioProcessor::processMidHighCircuit (juce::dsp::AudioBlock<float>& block) noexcept
+{
+    // In place: the Circuit engine splits, drives, level-trims and re-sums
+    // Mid and High entirely inside its own oversampled region.
+    circuitDrive.process (block);
+
+    // Pad up to the Classic engine's (possibly larger) latency so the plugin
+    // reports one sample-rate-dependent figure for both engines - see
+    // circuitAlignDelay's docs in PluginProcessor.h.
+    circuitAlignDelay.process (juce::dsp::ProcessContextReplacing<float> (block));
+}
+
+void CryptaAudioProcessor::applyEngineCrossfade (const juce::dsp::AudioBlock<const float>& outgoing,
+                                                   const juce::dsp::AudioBlock<const float>& incoming,
+                                                   juce::dsp::AudioBlock<float>& destination) noexcept
+{
+    const auto numChannels = destination.getNumChannels();
+    const auto numSamples = destination.getNumSamples();
+    constexpr auto length = static_cast<double> (engineCrossfadeLengthSamples);
+
+    for (size_t sample = 0; sample < numSamples; ++sample)
+    {
+        const auto remaining = juce::jmax (0, engineCrossfadeRemaining - static_cast<int> (sample));
+        const auto position = juce::jlimit (0.0, 1.0, (length - static_cast<double> (remaining)) / length);
+        const auto angle = position * juce::MathConstants<double>::halfPi;
+
+        const auto outgoingGain = static_cast<float> (std::cos (angle));
+        const auto incomingGain = static_cast<float> (std::sin (angle));
+
+        for (size_t channel = 0; channel < numChannels; ++channel)
+            destination.getChannelPointer (channel)[sample] =
+                outgoingGain * outgoing.getChannelPointer (channel)[sample]
+                + incomingGain * incoming.getChannelPointer (channel)[sample];
+    }
+
+    engineCrossfadeRemaining = juce::jmax (0, engineCrossfadeRemaining - static_cast<int> (numSamples));
 }
 
 //==============================================================================

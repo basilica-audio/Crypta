@@ -4,6 +4,7 @@
 #include <juce_dsp/juce_dsp.h>
 
 #include "dsp/BandEQ.h"
+#include "dsp/CircuitDrive.h"
 #include "dsp/Crossover.h"
 #include "dsp/IRLoader.h"
 #include "dsp/MidBand.h"
@@ -127,6 +128,22 @@ private:
     // resizing a buffer on the audio thread.
     void processChunk (juce::dsp::AudioBlock<float>& chunk) noexcept;
 
+    // The Mid+High section, once per engine. Classic reads `input` and writes
+    // the summed, post-IR-ready result to `output` (using the mid/high band
+    // buffers as scratch); Circuit works in place, because its two bands only
+    // exist inside its own oversampled region.
+    void processMidHighClassic (const juce::dsp::AudioBlock<const float>& input,
+                                 juce::dsp::AudioBlock<float>& output) noexcept;
+    void processMidHighCircuit (juce::dsp::AudioBlock<float>& block) noexcept;
+
+    // Equal-power fade from `outgoing` to `incoming`, advancing (and
+    // consuming) engineCrossfadeRemaining. `destination` may alias either
+    // source - each sample is written only after both inputs at that index
+    // have been read.
+    void applyEngineCrossfade (const juce::dsp::AudioBlock<const float>& outgoing,
+                                const juce::dsp::AudioBlock<const float>& incoming,
+                                juce::dsp::AudioBlock<float>& destination) noexcept;
+
     //==============================================================================
     juce::dsp::Gain<float> inputGainProcessor;
     juce::dsp::Gain<float> outputGainProcessor;
@@ -159,6 +176,27 @@ private:
     // oversampled distortion voicing (Gnaw/Wool/Razor), then level trim.
     cryp::Voicing highVoicing;
 
+    // v0.3.0 Circuit engine: replaces the midBand + highVoicing pair above
+    // with one shared oversampling region when driveEngine == Circuit. Both
+    // engines stay prepared at all times so switching between them is a
+    // branch, not a reallocation - and so the 64-sample crossfade below can
+    // run BOTH for the duration of a switch.
+    cryp::CircuitDrive circuitDrive;
+
+    // Equal-power crossfade between the two drive engines, in samples
+    // remaining. Non-zero only for the 64 samples following a driveEngine
+    // change; while it runs, processChunk() renders the Mid+High section
+    // through both engines and fades between them, which is what keeps an
+    // automated or preset-driven engine switch from producing a step
+    // discontinuity.
+    static constexpr int engineCrossfadeLengthSamples = 64;
+    int engineCrossfadeRemaining = 0;
+    bool lastDriveEngineWasCircuit = true;
+
+    // Scratch for the crossfade's second engine render. Sized with the other
+    // band buffers in prepareToPlay().
+    juce::AudioBuffer<float> engineCrossfadeBuffer;
+
     // Per-band level trims applied after each band's own dynamics/drive/
     // voicing processing and before the bands are summed back together.
     juce::dsp::Gain<float> lowGainProcessor;
@@ -184,6 +222,19 @@ private:
     // compensation is always an integer number of samples, never a
     // fractionally modulated delay.
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> lowBandLatencyDelay { maxLatencyCompensationSamples };
+
+    // Pads the Circuit engine's output up to the Classic engine's latency.
+    //
+    // The two engines can report different latencies: Classic is always 4x
+    // oversampled, while Circuit drops to 2x above 50 kHz and to 1x above
+    // 100 kHz. Rather than re-reporting latency to the host whenever
+    // driveEngine changes - which hosts handle poorly mid-transport, and
+    // which would make an automated engine switch shift the plugin's timing -
+    // the plugin always reports the larger of the two and delays the Circuit
+    // path by the difference. Reported latency is then a function of sample
+    // rate alone, constant across engine switches, and the crossfade above
+    // fades between two paths that are already time-aligned.
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> circuitAlignDelay { maxLatencyCompensationSamples };
 
     // Pre-allocated band buffers, sized to `preparedBlockSize` in
     // prepareToPlay(). Never resized in processBlock(). remainderBandBuffer
