@@ -360,11 +360,11 @@ namespace cryp
 
         scratch.setCutoff (oversampledRate,
                             trackedLowPassHz (highDrive01, trackedMinHz, oversampledRate * 0.45));
-        trackedLowPassG = scratch.g;
+        trackedLowPassG.setTarget (scratch.g);
 
         const auto toneHz = juce::mapToLog10 (static_cast<double> (highTone01), minToneHz, maxToneHz);
         scratch.setCutoff (oversampledRate, toneHz);
-        toneLowPassG = scratch.g;
+        toneLowPassG.setTarget (scratch.g);
 
         scratch.setCutoff (oversampledRate, razorPreEmphasisHz);
         razorHighPassG = scratch.g;
@@ -385,42 +385,72 @@ namespace cryp
         switch (voicing)
         {
             case VoicingType::gnaw:
-                highDriveGain = 1.0 + static_cast<double> (highDrive01) * (gnawMaxDriveGain - 1.0);
+                highDriveGain.setTarget (1.0 + static_cast<double> (highDrive01) * (gnawMaxDriveGain - 1.0));
                 break;
 
             case VoicingType::wool:
-                highDriveGain = 1.0 + static_cast<double> (highDrive01) * (woolMaxDriveGain - 1.0);
+                highDriveGain.setTarget (1.0 + static_cast<double> (highDrive01) * (woolMaxDriveGain - 1.0));
                 break;
 
             case VoicingType::razor:
             default:
-                highDriveGain = 1.0 + static_cast<double> (highDrive01) * (razorMaxDriveGain - 1.0);
+                highDriveGain.setTarget (1.0 + static_cast<double> (highDrive01) * (razorMaxDriveGain - 1.0));
                 break;
         }
 
-        midDriveGain = 1.0 + static_cast<double> (midDrive01) * (midMaxDriveGain - 1.0);
+        midDriveGain.setTarget (1.0 + static_cast<double> (midDrive01) * (midMaxDriveGain - 1.0));
+        midDriveAmount.setTarget (static_cast<double> (midDrive01));
+        highBlendAmount.setTarget (static_cast<double> (highBlend01));
+        highBiasOffset.setTarget (maxBiasOffset * static_cast<double> (highBias01));
 
-        midGainLinear = juce::Decibels::decibelsToGain (static_cast<double> (midLevelDb));
-        highGainLinear = juce::Decibels::decibelsToGain (static_cast<double> (highLevelDb));
+        midGainLinear.setTarget (juce::Decibels::decibelsToGain (static_cast<double> (midLevelDb)));
+        highGainLinear.setTarget (juce::Decibels::decibelsToGain (static_cast<double> (highLevelDb)));
+
+        // The very first block after prepare() has no previous value to ramp
+        // from, so it starts AT the target rather than sliding up to it from
+        // whatever the members happened to be constructed with.
+        if (! rampsInitialised)
+        {
+            commitRamps();
+            rampsInitialised = true;
+        }
+    }
+
+    void CircuitDrive::commitRamps() noexcept
+    {
+        trackedLowPassG.commit();
+        toneLowPassG.commit();
+        highDriveGain.commit();
+        midDriveGain.commit();
+        midDriveAmount.commit();
+        highBlendAmount.commit();
+        highBiasOffset.commit();
+        midGainLinear.commit();
+        highGainLinear.commit();
     }
 
     //==========================================================================
     void CircuitDrive::processMidChannel (float* data, size_t numSamples, size_t channel) noexcept
     {
         auto& state = midState[channel];
-        const auto drive = static_cast<double> (midDrive01);
         const TanhShaper shaper;
+
+        const auto inverseNumSamples = numSamples > 0 ? 1.0 / static_cast<double> (numSamples) : 0.0;
 
         for (size_t sample = 0; sample < numSamples; ++sample)
         {
             const auto x = static_cast<double> (data[sample]);
 
+            const auto gain = midDriveGain.at (sample, inverseNumSamples);
+            const auto drive = midDriveAmount.at (sample, inverseNumSamples);
+            const auto level = midGainLinear.at (sample, inverseNumSamples);
+
             // One ADAA tanh core in place of v0.2.0's two cascaded plain
             // tanh stages, keeping the same dry-crossfade-by-drive law so
             // "Mid Drive = 0 %" remains an exact passthrough.
-            const auto driven = state.shaper.process (midDriveGain * x, shaper);
+            const auto driven = state.shaper.process (gain * x, shaper);
 
-            data[sample] = static_cast<float> ((x + drive * (driven - x)) * midGainLinear);
+            data[sample] = static_cast<float> ((x + drive * (driven - x)) * level);
         }
     }
 
@@ -428,14 +458,25 @@ namespace cryp
     {
         auto& state = highState[channel];
 
-        const auto blend = static_cast<double> (highBlend01);
-        const auto biasOffset = maxBiasOffset * static_cast<double> (highBias01);
-
         const HardClipShaper hardClip;
         const TanhShaper tanhShaper;
+        juce::ignoreUnused (tanhShaper);
+
+        const auto inverseNumSamples = numSamples > 0 ? 1.0 / static_cast<double> (numSamples) : 0.0;
 
         for (size_t sample = 0; sample < numSamples; ++sample)
         {
+            const auto blend = highBlendAmount.at (sample, inverseNumSamples);
+            const auto biasOffset = highBiasOffset.at (sample, inverseNumSamples);
+            const auto highDriveGainNow = highDriveGain.at (sample, inverseNumSamples);
+
+            // The drive-tracked and tone lowpass coefficients are ramped too:
+            // both move with automatable controls, and a one-pole whose
+            // coefficient jumps once per block is as audible as a gain that
+            // does.
+            state.trackedLowPass.g = trackedLowPassG.at (sample, inverseNumSamples);
+            state.toneLowPass.g = toneLowPassG.at (sample, inverseNumSamples);
+
             auto x = static_cast<double> (data[sample]);
 
             // Tight: the pre-drive highpass, voicing-independent since
@@ -450,7 +491,7 @@ namespace cryp
                 {
                     // Pre-emphasis -> hard clip -> exact inverse de-emphasis.
                     const auto emphasised = state.preEmphasis.process (x);
-                    const auto clipped = state.shaper.process (highDriveGain * emphasised + biasOffset, hardClip);
+                    const auto clipped = state.shaper.process (highDriveGainNow * emphasised + biasOffset, hardClip);
                     shaped = state.deEmphasis.process (clipped);
                     break;
                 }
@@ -469,7 +510,7 @@ namespace cryp
                     state.biasEnvelope += coefficient * (excess - state.biasEnvelope);
 
                     const auto offset = biasOffset - biasDepthVolts * state.biasEnvelope;
-                    const auto driven = highDriveGain * x + offset;
+                    const auto driven = highDriveGainNow * x + offset;
 
                     // Subtract what the shaper does to the offset ON ITS OWN.
                     // Without this the decaying bias envelope is itself an
@@ -494,7 +535,7 @@ namespace cryp
                     // pre-emphasis keeps the bass fundamental out of the
                     // clipped path.
                     const auto emphasised = state.razorHighPass.processHighPass (x);
-                    const auto clipped = state.shaper.process (highDriveGain * emphasised + biasOffset, razorCurve);
+                    const auto clipped = state.shaper.process (highDriveGainNow * emphasised + biasOffset, razorCurve);
                     shaped = x + clipped;
                     break;
                 }
@@ -519,7 +560,7 @@ namespace cryp
             // pitfalls) needed.
             const auto blended = (1.0 - blend) * static_cast<double> (dry[sample]) + blend * shaped;
 
-            data[sample] = static_cast<float> (blended * highGainLinear);
+            data[sample] = static_cast<float> (blended * highGainLinear.at (sample, inverseNumSamples));
         }
     }
 
@@ -559,8 +600,10 @@ namespace cryp
             state.character.a1 = characterPrototype.a1;
             state.character.a2 = characterPrototype.a2;
 
-            state.trackedLowPass.g = trackedLowPassG;
-            state.toneLowPass.g = toneLowPassG;
+            // trackedLowPass and toneLowPass are NOT set here: both follow
+            // automatable controls and are ramped per sample inside
+            // processHighChannel(). razorHighPass and dcBlocker are fixed
+            // corners, so a block-rate write is right for them.
             state.razorHighPass.g = razorHighPassG;
             state.dcBlocker.g = dcBlockerG;
         }
@@ -610,6 +653,10 @@ namespace cryp
             midBandLevel = rmsOf (midBlock);
             highBandLevel = rmsOf (highBlock);
         }
+
+        // Every channel has now walked the same ramps, so advance them once
+        // for the whole block.
+        commitRamps();
 
         // Sum the two bands back together at the oversampled rate, then take
         // the single downsample.

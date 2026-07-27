@@ -157,6 +157,35 @@ namespace cryp
         void processHighChannel (float* data, const float* dry, size_t numSamples, size_t channel) noexcept;
         void processMidChannel (float* data, size_t numSamples, size_t channel) noexcept;
 
+        // Per-block scalar targets are ramped across the block rather than
+        // stepped at its boundary (brief §3.6). A host automating drive sends
+        // one value per block; applying it as a constant puts a staircase into
+        // the audio, which measures as broadband non-harmonic spurs - about
+        // -27 dBc on a fast highDrive sweep before this existed.
+        //
+        // Each smoothed scalar keeps the value it ENDED the last block at.
+        // Every channel then interpolates from that value to the new target
+        // across the block, and the stored value is advanced once, after all
+        // channels are done - so the channels stay in step with each other.
+        struct RampedScalar
+        {
+            double current = 0.0;
+            double target = 0.0;
+
+            void snap (double value) noexcept { current = target = value; }
+            void setTarget (double value) noexcept { target = value; }
+
+            double at (size_t sample, double inverseNumSamples) const noexcept
+            {
+                const auto position = static_cast<double> (sample + 1) * inverseNumSamples;
+                return current + (target - current) * position;
+            }
+
+            void commit() noexcept { current = target; }
+        };
+
+        void commitRamps() noexcept;
+
         double baseSampleRate = 44100.0;
         double oversampledRate = 176400.0;
         int oversamplingFactor = 4;
@@ -194,16 +223,22 @@ namespace cryp
         CircuitBiquad preEmphasisPrototype;
         CircuitBiquad deEmphasisPrototype;
         CircuitBiquad characterPrototype;
-        double trackedLowPassG = 1.0;
-        double toneLowPassG = 1.0;
         double razorHighPassG = 1.0;
         double dcBlockerG = 1.0;
         double biasAttackG = 1.0;
         double biasReleaseG = 1.0;
-        double highDriveGain = 1.0;
-        double midDriveGain = 1.0;
-        double midGainLinear = 1.0;
-        double highGainLinear = 1.0;
+
+        // Ramped across each block - see RampedScalar.
+        RampedScalar trackedLowPassG;
+        RampedScalar toneLowPassG;
+        RampedScalar highDriveGain;
+        RampedScalar midDriveGain;
+        RampedScalar midDriveAmount;
+        RampedScalar highBlendAmount;
+        RampedScalar highBiasOffset;
+        RampedScalar midGainLinear;
+        RampedScalar highGainLinear;
+        bool rampsInitialised = false;
 
         float midBandLevel = 0.0f;
         float highBandLevel = 0.0f;
