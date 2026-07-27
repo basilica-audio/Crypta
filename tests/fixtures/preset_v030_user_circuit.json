@@ -1,0 +1,15 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.crypta",
+    "pluginVersion": "0.3.0",
+    "name": "Modern User",
+    "category": "Bass",
+    "parameters": {
+        "driveEngine": 1.0,
+        "lowCompDetector": 1.0,
+        "gateMode": 1.0,
+        "midDrive": 35.0,
+        "highDrive": 55.0,
+        "highBias": 30.0
+    }
+}

@@ -177,6 +177,11 @@ namespace
             { BinaryData::definitionOnly_json, BinaryData::definitionOnly_jsonSize },
             { BinaryData::cleanLowLoudTop_json, BinaryData::cleanLowLoudTop_jsonSize },
             { BinaryData::cabColoredGrind_json, BinaryData::cabColoredGrind_jsonSize },
+
+            // v0.3.0 Circuit-engine showcases.
+            { BinaryData::circuitFoundation_json, BinaryData::circuitFoundation_jsonSize },
+            { BinaryData::circuitGrind_json, BinaryData::circuitGrind_jsonSize },
+            { BinaryData::circuitKnife_json, BinaryData::circuitKnife_jsonSize },
         };
     }
 }

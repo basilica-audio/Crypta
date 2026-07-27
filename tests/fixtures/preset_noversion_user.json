@@ -1,0 +1,11 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.crypta",
+    "name": "Ancient No Version",
+    "category": "Bass",
+    "parameters": {
+        "splitLowHz": 90.0,
+        "midDrive": 15.0,
+        "highDrive": 30.0
+    }
+}

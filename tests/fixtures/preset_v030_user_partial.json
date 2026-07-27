@@ -1,0 +1,11 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.crypta",
+    "pluginVersion": "0.3.0",
+    "name": "Modern Partial",
+    "category": "Bass",
+    "parameters": {
+        "driveEngine": 0.0,
+        "midDrive": 35.0
+    }
+}

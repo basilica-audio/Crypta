@@ -1,10 +1,13 @@
 {
     "format": "basilica-preset-1",
     "plugin": "com.yvesvogl.crypta",
-    "pluginVersion": "0.2.0",
+    "pluginVersion": "0.3.0",
     "name": "Throat",
     "category": "Bass",
     "parameters": {
+        "driveEngine": 0.0,
+        "lowCompDetector": 0.0,
+        "gateMode": 0.0,
         "splitLowHz": 100.0,
         "splitHighHz": 800.0,
         "lowCompRatio": 2.0,

@@ -1,0 +1,17 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.crypta",
+    "pluginVersion": "0.2.0",
+    "name": "User Tuned",
+    "category": "Bass",
+    "parameters": {
+        "splitLowHz": 140.0,
+        "splitHighHz": 750.0,
+        "lowCompThreshold": -22.0,
+        "lowCompRatio": 3.0,
+        "midDrive": 45.0,
+        "highVoicing": 2.0,
+        "highDrive": 65.0,
+        "highBlend": 90.0
+    }
+}
