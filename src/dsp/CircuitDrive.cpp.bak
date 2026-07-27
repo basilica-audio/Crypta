@@ -37,14 +37,8 @@ namespace
     // waveshaper structurally cannot produce.
     constexpr double biasAttackMs = 0.5;
     constexpr double biasReleaseMs = 20.0; // the Cout*Rg blocking constant
-    constexpr double biasThreshold = 0.2;
-
-    // How far the envelope pushes the clipper's operating point. Kept
-    // deliberately modest: the offset makes the clipping asymmetric, that
-    // asymmetry produces real DC, and the 10 Hz blocker downstream then has
-    // to restore it - so a large depth buys a bigger gain change at the cost
-    // of a longer DC-restoration tail after every loud passage.
-    constexpr double biasDepthVolts = 0.3;
+    constexpr double biasThreshold = 0.1;
+    constexpr double biasDepthVolts = 1.0;
 
     // Razor ("tight overdrive"): the TS-style feedback clipper's Tier B
     // factorization (research-diode-clipper-dk.md §4). 720 Hz is the guitar
@@ -468,19 +462,8 @@ namespace cryp
                     const auto coefficient = excess > state.biasEnvelope ? biasAttackG : biasReleaseG;
                     state.biasEnvelope += coefficient * (excess - state.biasEnvelope);
 
-                    const auto offset = biasOffset - biasDepthVolts * state.biasEnvelope;
-                    const auto driven = highDriveGain * x + offset;
-
-                    // Subtract what the shaper does to the offset ON ITS OWN.
-                    // Without this the decaying bias envelope is itself an
-                    // audible signal - a 20 ms thump after every loud note -
-                    // and the DC blocker cannot remove it, because a 20 ms
-                    // decay is nowhere near DC. Removing the offset's own
-                    // image leaves only what the bias is actually for: the
-                    // change in the curve's local SLOPE, i.e. the gain the
-                    // next quiet note is shaped by. Same construction v0.2.0's
-                    // Wool used for its static asymmetry bias.
-                    shaped = state.shaper.process (driven, woolCurve) - woolCurve.evaluate (offset);
+                    const auto driven = highDriveGain * x - biasDepthVolts * state.biasEnvelope + biasOffset;
+                    shaped = state.shaper.process (driven, woolCurve);
                     break;
                 }
 

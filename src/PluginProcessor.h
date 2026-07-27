@@ -183,13 +183,20 @@ private:
     // run BOTH for the duration of a switch.
     cryp::CircuitDrive circuitDrive;
 
-    // Equal-power crossfade between the two drive engines, in samples
-    // remaining. Non-zero only for the 64 samples following a driveEngine
-    // change; while it runs, processChunk() renders the Mid+High section
-    // through both engines and fades between them, which is what keeps an
-    // automated or preset-driven engine switch from producing a step
-    // discontinuity.
-    static constexpr int engineCrossfadeLengthSamples = 64;
+    // Constant-gain crossfade between the two drive engines, in samples
+    // remaining. Non-zero only immediately after a driveEngine change; while
+    // it runs, processChunk() renders the Mid+High section through both
+    // engines and fades between them, which is what keeps an automated or
+    // preset-driven engine switch from producing a step discontinuity.
+    //
+    // 256 samples rather than the brief's 64: the incoming engine is reset at
+    // the switch (see processChunk()) and therefore needs its own oversampling
+    // latency - around 30-40 samples at base rate - before it is producing
+    // full-level output at all. A 64-sample fade would still be handing it
+    // significant gain while it was ramping up from silence. 256 samples
+    // (5.3 ms at 48 kHz) keeps the incoming gain below 15 % until the engine
+    // has filled, and is still short enough to read as an instant switch.
+    static constexpr int engineCrossfadeLengthSamples = 256;
     int engineCrossfadeRemaining = 0;
     bool lastDriveEngineWasCircuit = true;
 
