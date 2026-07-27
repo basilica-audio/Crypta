@@ -7,8 +7,10 @@
 #include "dsp/CircuitDrive.h"
 #include "dsp/Crossover.h"
 #include "dsp/IRLoader.h"
+#include "dsp/MeterTaps.h"
 #include "dsp/MidBand.h"
 #include "dsp/NoiseGateStage.h"
+#include "dsp/OutputClipper.h"
 #include "dsp/ParallelCompressor.h"
 #include "dsp/PhaseAlignFilter.h"
 #include "dsp/Voicing.h"
@@ -90,6 +92,11 @@ public:
     // load), never from processBlock() or any audio-thread callback.
     void loadImpulseResponse (juce::AudioBuffer<float> irBuffer, double irSampleRate);
 
+    // Lock-free metering, written by the audio thread and read by the UI (or
+    // by tests). See src/dsp/MeterTaps.h - reading is always safe, from any
+    // thread, at any time.
+    const cryp::MeterTaps& getMeterTaps() const noexcept { return meterTaps; }
+
     // Test-only observability seam (docs/design-brief.md guarantee #3: "Low
     // band never reaches the IR loader"). When non-null, processChunk()
     // copies the Low band's own fully-processed (post-compressor, post-
@@ -143,6 +150,12 @@ private:
     void applyEngineCrossfade (const juce::dsp::AudioBlock<const float>& outgoing,
                                 const juce::dsp::AudioBlock<const float>& incoming,
                                 juce::dsp::AudioBlock<float>& destination) noexcept;
+
+    // Writes the block's metering values into meterTaps. Block-rate only -
+    // nothing here touches the per-sample path.
+    void publishMeterTaps (const juce::dsp::AudioBlock<float>& output,
+                            size_t numChannels,
+                            size_t numSamples) noexcept;
 
     //==============================================================================
     juce::dsp::Gain<float> inputGainProcessor;
@@ -216,6 +229,26 @@ private:
     // enforced in processChunk() below, not just by convention.
     cryp::BandEQ eq;
     cryp::IRLoader irLoader;
+
+    // v0.3.0 safety clip: ADAA ceiling clip in delta form, replacing the raw
+    // base-rate std::tanh (see src/dsp/OutputClipper.h).
+    cryp::OutputClipper outputClipper;
+
+    // v0.3.0 metering backend (issue #13).
+    cryp::MeterTaps meterTaps;
+
+    // One-pole smoothing for the per-band level meters, ~300 ms so the
+    // display sits still. Block-rate is plenty for a 30 Hz UI.
+    float lowBandMeterLevel = 0.0f;
+    float midBandMeterLevel = 0.0f;
+    float highBandMeterLevel = 0.0f;
+
+    // Raw per-band RMS for the current chunk, written by whichever drive
+    // engine ran and consumed by the smoothing above. The Circuit engine's Mid
+    // and High bands are summed before it returns, so it has to report them
+    // itself rather than let processChunk() measure them.
+    float pendingMidBandLevel = 0.0f;
+    float pendingHighBandLevel = 0.0f;
 
     // Issue #9: upper bound on the latency this plugin will ever need to
     // compensate for, i.e. the largest oversampling latency the Mid+High

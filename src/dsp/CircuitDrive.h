@@ -120,6 +120,12 @@ namespace cryp
 
         int getOversamplingFactor() const noexcept { return oversamplingFactor; }
 
+        // Post-drive, post-level RMS of each band for the last processed
+        // block. The two bands are summed inside the oversampled region, so
+        // they cannot be measured from outside this class.
+        float getMidBandLevel() const noexcept { return midBandLevel; }
+        float getHighBandLevel() const noexcept { return highBandLevel; }
+
         //======================================================================
         // Control-rate setters. All real-time safe (scalar stores only; the
         // coefficients they imply are recomputed once per block in process()).
@@ -198,6 +204,9 @@ namespace cryp
         double midDriveGain = 1.0;
         double midGainLinear = 1.0;
         double highGainLinear = 1.0;
+
+        float midBandLevel = 0.0f;
+        float highBandLevel = 0.0f;
 
         //======================================================================
         // Per-channel state.

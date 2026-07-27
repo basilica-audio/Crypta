@@ -12,6 +12,7 @@ namespace cryp
     void ParallelCompressor::prepare (const juce::dsp::ProcessSpec& spec, float initialWetMixProportion01)
     {
         compressor.prepare (spec);
+        detector.prepare (spec);
         makeupGain.setRampDurationSeconds (makeupGainRampDurationSeconds);
         makeupGain.prepare (spec);
 
@@ -31,6 +32,7 @@ namespace cryp
     void ParallelCompressor::reset()
     {
         compressor.reset();
+        detector.reset();
         makeupGain.reset();
         mixer.reset();
     }

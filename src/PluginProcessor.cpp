@@ -470,6 +470,13 @@ void CryptaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     // priming contract is unchanged from v1.
     irLoader.prepare (spec, irMixPercent->load (std::memory_order_relaxed) / 100.0f);
 
+    // v0.3.0 safety clip and metering.
+    outputClipper.prepare (spec);
+    outputClipper.setCeilingDb (clipCeilingDb->load (std::memory_order_relaxed));
+    meterTaps.reset();
+    lowBandMeterLevel = midBandMeterLevel = highBandMeterLevel = 0.0f;
+    pendingMidBandLevel = pendingHighBandLevel = 0.0f;
+
     // Issue #9: (re)allocate the low-band compensation delay line for the
     // new spec/max-delay bound. setMaximumDelayInSamples() may allocate, so
     // it must only ever be called here, never from processBlock().
@@ -571,6 +578,11 @@ void CryptaAudioProcessor::reset()
 
     lowBandLatencyDelay.reset();
     circuitAlignDelay.reset();
+    outputClipper.reset();
+
+    meterTaps.reset();
+    lowBandMeterLevel = midBandMeterLevel = highBandMeterLevel = 0.0f;
+    pendingMidBandLevel = pendingHighBandLevel = 0.0f;
 }
 
 bool CryptaAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -630,12 +642,28 @@ void CryptaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     gate.setAttackMs (gateAttackMs->load (std::memory_order_relaxed));
     gate.setReleaseMs (gateReleaseMs->load (std::memory_order_relaxed));
 
+    // v0.3.0 Modern gate controls. Inert while gateMode is Classic.
+    gate.setModernMode (gateModeChoice->load (std::memory_order_relaxed) >= 0.5f);
+    gate.setHysteresisDb (gateHysteresisDb->load (std::memory_order_relaxed));
+    gate.setHoldMs (gateHoldMs->load (std::memory_order_relaxed));
+    gate.setRangeDb (gateRangeDb->load (std::memory_order_relaxed));
+    gate.setSidechainHighPassHz (gateScHpfHz->load (std::memory_order_relaxed));
+
     lowCompressor.setThresholdDb (lowCompThresholdDb->load (std::memory_order_relaxed));
     lowCompressor.setRatio (lowCompRatio->load (std::memory_order_relaxed));
     lowCompressor.setAttackMs (lowCompAttackMs->load (std::memory_order_relaxed));
     lowCompressor.setReleaseMs (lowCompReleaseMs->load (std::memory_order_relaxed));
-    lowCompressor.setMakeupGainDb (lowCompMakeupDb->load (std::memory_order_relaxed));
     lowCompressor.setWetMixProportion (lowCompMixPercent->load (std::memory_order_relaxed) / 100.0f);
+
+    // v0.3.0 detector engine and its controls. Knee and auto-release are
+    // Smooth-RMS-only; auto-makeup is read by both engines, so it is folded
+    // into the makeup gain here rather than inside the detector.
+    lowCompressor.setUseSmoothRmsDetector (lowCompDetectorChoice->load (std::memory_order_relaxed) >= 0.5f);
+    lowCompressor.setKneeDb (lowCompKneeDb->load (std::memory_order_relaxed));
+    lowCompressor.setAutoRelease (lowCompAutoReleaseFlag->load (std::memory_order_relaxed) >= 0.5f);
+    lowCompressor.setAutoMakeup (lowCompAutoMakeupFlag->load (std::memory_order_relaxed) >= 0.5f);
+    lowCompressor.setMakeupGainDb (
+        lowCompressor.getEffectiveMakeupDb (lowCompMakeupDb->load (std::memory_order_relaxed)));
 
     midBand.setDrive (midDrivePercent->load (std::memory_order_relaxed) / 100.0f);
 
@@ -689,6 +717,24 @@ void CryptaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
 void CryptaAudioProcessor::processChunk (juce::dsp::AudioBlock<float>& chunk) noexcept
 {
+    // Input peak, measured before anything touches the signal - including the
+    // input trim, so the meter shows what the host is actually sending.
+    {
+        const auto peakOf = [&chunk] (size_t channel)
+        {
+            const auto* data = chunk.getChannelPointer (channel);
+            float peak = 0.0f;
+
+            for (size_t sample = 0; sample < chunk.getNumSamples(); ++sample)
+                peak = juce::jmax (peak, std::abs (data[sample]));
+
+            return peak;
+        };
+
+        meterTaps.inputPeakLeft.store (chunk.getNumChannels() > 0 ? peakOf (0) : 0.0f, std::memory_order_relaxed);
+        meterTaps.inputPeakRight.store (chunk.getNumChannels() > 1 ? peakOf (1) : 0.0f, std::memory_order_relaxed);
+    }
+
     inputGainProcessor.process (juce::dsp::ProcessContextReplacing<float> (chunk));
 
     // Full-band noise gate, ahead of the crossover splits.
@@ -797,6 +843,34 @@ void CryptaAudioProcessor::processChunk (juce::dsp::AudioBlock<float>& chunk) no
         processMidHighClassic (juce::dsp::AudioBlock<const float> (remainderBlock), midHighSumBlock);
     }
 
+    // Per-band meter levels. Low is measured here directly; Mid and High come
+    // from whichever engine just ran, because the Circuit engine's two bands
+    // only exist inside its own oversampled region and are already summed by
+    // the time control returns. Both engines report post-drive, post-level
+    // RMS, so the two read the same scale.
+    {
+        double sumOfSquares = 0.0;
+        const auto* lowData = lowBlock.getChannelPointer (0);
+
+        for (size_t sample = 0; sample < numSamples; ++sample)
+            sumOfSquares += static_cast<double> (lowData[sample]) * static_cast<double> (lowData[sample]);
+
+        const auto lowRms = numSamples > 0
+                                ? static_cast<float> (std::sqrt (sumOfSquares / static_cast<double> (numSamples)))
+                                : 0.0f;
+
+        // ~300 ms one-pole at block rate, so the display settles instead of
+        // flickering. Derived from the actual block length, so the time
+        // constant does not change with the host's buffer size.
+        const auto blockSeconds = static_cast<float> (numSamples)
+                                   / static_cast<float> (juce::jmax (1.0, getSampleRate()));
+        const auto smoothing = juce::jlimit (0.0f, 1.0f, blockSeconds / 0.3f);
+
+        lowBandMeterLevel += smoothing * (lowRms - lowBandMeterLevel);
+        midBandMeterLevel += smoothing * (pendingMidBandLevel - midBandMeterLevel);
+        highBandMeterLevel += smoothing * (pendingHighBandLevel - highBandMeterLevel);
+    }
+
     // Issue #9: time-align the low band with the latency the Mid+High
     // branch's oversampling stages introduce.
     lowBandLatencyDelay.process (juce::dsp::ProcessContextReplacing<float> (lowBlock));
@@ -818,22 +892,51 @@ void CryptaAudioProcessor::processChunk (juce::dsp::AudioBlock<float>& chunk) no
     if (eqEnabled->load (std::memory_order_relaxed) >= 0.5f)
         eq.process (chunk);
 
-    // Optional safety clip: a soft (tanh) limiter that only engages when the
-    // user explicitly enables it, protecting against accidental hard-clipped
-    // overs without colouring the signal at typical playing levels
-    // (tanh(x) ~= x for |x| well below 1.0).
+    // Optional safety clip. v0.3.0 replaces v0.2.0's raw base-rate std::tanh
+    // with an ADAA ceiling clip in delta form: far less aliasing, a settable
+    // ceiling, and - unlike the naive antialiased form - genuinely transparent
+    // below that ceiling rather than lowpassing the whole mix whenever it is
+    // armed. See src/dsp/OutputClipper.h. Skipped entirely when disabled, so
+    // the off state stays a bit-exact bypass.
     if (outputClipEnabled->load (std::memory_order_relaxed) >= 0.5f)
     {
-        for (size_t channel = 0; channel < numChannels; ++channel)
-        {
-            auto* data = chunk.getChannelPointer (channel);
-
-            for (size_t sample = 0; sample < numSamples; ++sample)
-                data[sample] = std::tanh (data[sample]);
-        }
+        outputClipper.setCeilingDb (clipCeilingDb->load (std::memory_order_relaxed));
+        outputClipper.process (chunk);
     }
 
     outputGainProcessor.process (juce::dsp::ProcessContextReplacing<float> (chunk));
+
+    publishMeterTaps (chunk, numChannels, numSamples);
+}
+
+void CryptaAudioProcessor::publishMeterTaps (const juce::dsp::AudioBlock<float>& output,
+                                               size_t numChannels,
+                                               size_t numSamples) noexcept
+{
+    // Block-rate decimation is all a 30 Hz UI can use, and it keeps this off
+    // the per-sample path entirely. Stores are relaxed: each slot is
+    // independent and a reader that sees one update a block late is showing a
+    // meter 20 ms stale, which no one can perceive.
+    const auto blockPeak = [&output, numSamples] (size_t channel)
+    {
+        const auto* data = output.getChannelPointer (channel);
+        float peak = 0.0f;
+
+        for (size_t sample = 0; sample < numSamples; ++sample)
+            peak = juce::jmax (peak, std::abs (data[sample]));
+
+        return peak;
+    };
+
+    meterTaps.outputPeakLeft.store (numChannels > 0 ? blockPeak (0) : 0.0f, std::memory_order_relaxed);
+    meterTaps.outputPeakRight.store (numChannels > 1 ? blockPeak (1) : 0.0f, std::memory_order_relaxed);
+
+    meterTaps.lowBandLevel.store (lowBandMeterLevel, std::memory_order_relaxed);
+    meterTaps.midBandLevel.store (midBandMeterLevel, std::memory_order_relaxed);
+    meterTaps.highBandLevel.store (highBandMeterLevel, std::memory_order_relaxed);
+
+    meterTaps.lowCompGainReductionDb.store (lowCompressor.getGainReductionDb(), std::memory_order_relaxed);
+    meterTaps.gateGainReductionDb.store (gate.getGainReductionDb(), std::memory_order_relaxed);
 }
 
 void CryptaAudioProcessor::processMidHighClassic (const juce::dsp::AudioBlock<const float>& input,
@@ -858,6 +961,26 @@ void CryptaAudioProcessor::processMidHighClassic (const juce::dsp::AudioBlock<co
     highVoicing.process (highBlock);
     highGainProcessor.process (juce::dsp::ProcessContextReplacing<float> (highBlock));
 
+    // Band levels for the meter taps, to match what the Circuit engine
+    // reports from inside its own oversampled region.
+    {
+        const auto rmsOf = [numSamples] (const juce::dsp::AudioBlock<float>& band)
+        {
+            const auto* data = band.getChannelPointer (0);
+            double sumOfSquares = 0.0;
+
+            for (size_t sample = 0; sample < numSamples; ++sample)
+                sumOfSquares += static_cast<double> (data[sample]) * static_cast<double> (data[sample]);
+
+            return numSamples > 0
+                       ? static_cast<float> (std::sqrt (sumOfSquares / static_cast<double> (numSamples)))
+                       : 0.0f;
+        };
+
+        pendingMidBandLevel = rmsOf (midBlock);
+        pendingHighBandLevel = rmsOf (highBlock);
+    }
+
     // Sum Mid + High into a dedicated buffer (never aliasing either addend)
     // ahead of the relocated IR loader.
     output.replaceWithSumOf (juce::dsp::AudioBlock<const float> (midBlock),
@@ -869,6 +992,9 @@ void CryptaAudioProcessor::processMidHighCircuit (juce::dsp::AudioBlock<float>& 
     // In place: the Circuit engine splits, drives, level-trims and re-sums
     // Mid and High entirely inside its own oversampled region.
     circuitDrive.process (block);
+
+    pendingMidBandLevel = circuitDrive.getMidBandLevel();
+    pendingHighBandLevel = circuitDrive.getHighBandLevel();
 
     // Pad up to the Classic engine's (possibly larger) latency so the plugin
     // reports one sample-rate-dependent figure for both engines - see

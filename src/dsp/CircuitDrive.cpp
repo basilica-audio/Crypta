@@ -591,6 +591,26 @@ namespace cryp
                                  channel);
         }
 
+        // Band levels for the meter taps, measured here because the two bands
+        // stop existing separately on the next line.
+        {
+            const auto rmsOf = [upSamples] (const juce::dsp::AudioBlock<float>& band)
+            {
+                const auto* data = band.getChannelPointer (0);
+                double sumOfSquares = 0.0;
+
+                for (size_t sample = 0; sample < upSamples; ++sample)
+                    sumOfSquares += static_cast<double> (data[sample]) * static_cast<double> (data[sample]);
+
+                return upSamples > 0
+                           ? static_cast<float> (std::sqrt (sumOfSquares / static_cast<double> (upSamples)))
+                           : 0.0f;
+            };
+
+            midBandLevel = rmsOf (midBlock);
+            highBandLevel = rmsOf (highBlock);
+        }
+
         // Sum the two bands back together at the oversampled rate, then take
         // the single downsample.
         upBlock.replaceWithSumOf (juce::dsp::AudioBlock<const float> (midBlock),
