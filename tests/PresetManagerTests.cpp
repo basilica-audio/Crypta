@@ -42,6 +42,9 @@ namespace
             { BinaryData::definitionOnly_json, BinaryData::definitionOnly_jsonSize },
             { BinaryData::cleanLowLoudTop_json, BinaryData::cleanLowLoudTop_jsonSize },
             { BinaryData::cabColoredGrind_json, BinaryData::cabColoredGrind_jsonSize },
+            { BinaryData::circuitFoundation_json, BinaryData::circuitFoundation_jsonSize },
+            { BinaryData::circuitGrind_json, BinaryData::circuitGrind_jsonSize },
+            { BinaryData::circuitKnife_json, BinaryData::circuitKnife_jsonSize },
         };
     }
 
@@ -79,7 +82,34 @@ namespace
         config.manufacturerName = "Yves Vogl";
         config.pluginVersion = "0.2.0-test";
         config.userPresetsDirectoryOverrideForTests = userDir;
+
+        // Mirrors PluginProcessor.cpp's production config: without this the
+        // v0.3.0 legacy engine back-fill would be inactive in these tests, and
+        // the T20 cases below would be asserting against a code path the real
+        // plugin does not use.
+        config.legacyParameterCutoffVersion = "0.3.0";
+        config.legacyParameterDefaults = {
+            { ParamIDs::driveEngine, 0.0f },
+            { ParamIDs::lowCompDetector, 0.0f },
+            { ParamIDs::gateMode, 0.0f },
+        };
+
         return config;
+    }
+
+    // Reads a fixture from tests/fixtures. __FILE__ is absolute because
+    // CMakeLists.txt globs the test sources.
+    juce::File presetFixture (const juce::String& name)
+    {
+        return juce::File (juce::String (__FILE__)).getParentDirectory()
+            .getChildFile ("fixtures").getChildFile (name);
+    }
+
+    int choiceIndexOf (CryptaAudioProcessor& processor, const char* id)
+    {
+        auto* param = dynamic_cast<juce::AudioParameterChoice*> (processor.apvts.getParameter (id));
+        REQUIRE (param != nullptr);
+        return param->getIndex();
     }
 
     void setParam (CryptaAudioProcessor& processor, const char* id, float realValue)
@@ -263,7 +293,9 @@ TEST_CASE ("PresetManager: every factory preset parses and loads without error",
     const auto all = manager.getAllPresets();
     const auto factoryCount = std::count_if (all.begin(), all.end(), [] (auto& e) { return e.isFactory; });
 
-    REQUIRE (factoryCount == 9); // docs/presets.md - Default + 8 brief-table presets
+    // docs/presets.md - Default + 8 brief-table presets, plus the three
+    // v0.3.0 Circuit-engine showcases.
+    REQUIRE (factoryCount == 12);
 
     for (auto& entry : all)
     {
@@ -606,4 +638,198 @@ TEST_CASE ("PresetManager: parameter-driven dirty tracking coexists safely with 
     }
 
     CHECK (manager.isDirty());
+}
+
+//==============================================================================
+// v0.2.0 -> v0.3.0 preset migration (brief §4 step 3 / §6 T20).
+//
+// Presets never pass through setStateInformation(), so the session-state
+// migration does not cover them. And because applyParsedPreset() resets every
+// parameter to its default before applying a preset's values, a preset that
+// predates the three engine selectors would pick up their NEW defaults -
+// silently re-voicing tuned user work on load. These are the tests for the
+// read-side back-fill that prevents that.
+
+TEST_CASE ("T20: factory presets pin their engines explicitly", "[presets][migration]")
+{
+    ScopedTestDirectory scratch;
+
+    CryptaAudioProcessor processor;
+    PresetManager manager (processor.apvts, makeIsolatedConfig (scratch.dir), makeTestFactoryPresetAssets());
+
+    SECTION ("Default boots the new Circuit engines")
+    {
+        // default.json IS the mechanism by which a fresh instance reaches the
+        // Circuit engine: the processor constructor calls applyStartupDefault(),
+        // which loads it. If this regressed, the release's headline feature
+        // would be off by default and nothing else would fail.
+        REQUIRE (manager.loadPreset ("Default"));
+
+        CHECK (choiceIndexOf (processor, ParamIDs::driveEngine) == 1);      // Circuit
+        CHECK (choiceIndexOf (processor, ParamIDs::lowCompDetector) == 1);  // Smooth RMS
+        CHECK (choiceIndexOf (processor, ParamIDs::gateMode) == 1);         // Modern
+    }
+
+    SECTION ("the tuned v0.2.0 factory presets stay on the Classic engines")
+    {
+        // These were voiced against the v0.2.0 DSP. Moving them to the Circuit
+        // engine would change how every one of them sounds, so they pin
+        // Classic explicitly rather than relying on the version gate.
+        for (const auto* name : { "Glue & Grind", "Sub Lock", "Throat", "Fuzz Wall",
+                                   "Cut Through", "Definition Only", "Clean Low, Loud Top",
+                                   "Cab-Colored Grind" })
+        {
+            INFO ("preset: " << name);
+            REQUIRE (manager.loadPreset (name));
+
+            CHECK (choiceIndexOf (processor, ParamIDs::driveEngine) == 0);
+            CHECK (choiceIndexOf (processor, ParamIDs::lowCompDetector) == 0);
+            CHECK (choiceIndexOf (processor, ParamIDs::gateMode) == 0);
+        }
+    }
+
+    SECTION ("the new Circuit presets load, select the Circuit engines, and render finite")
+    {
+        for (const auto* name : { "Circuit Foundation", "Circuit Grind", "Circuit Knife" })
+        {
+            INFO ("preset: " << name);
+            REQUIRE (manager.loadPreset (name));
+
+            CHECK (choiceIndexOf (processor, ParamIDs::driveEngine) == 1);
+            CHECK (choiceIndexOf (processor, ParamIDs::lowCompDetector) == 1);
+            CHECK (choiceIndexOf (processor, ParamIDs::gateMode) == 1);
+
+            processor.setPlayConfigDetails (2, 2, 48000.0, 512);
+            processor.prepareToPlay (48000.0, 512);
+            processor.reset();
+
+            juce::AudioBuffer<float> buffer (2, 4096);
+
+            for (int channel = 0; channel < 2; ++channel)
+                for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+                    buffer.setSample (channel, sample,
+                                       0.4f * std::sin (juce::MathConstants<float>::twoPi * 80.0f
+                                                         * static_cast<float> (sample) / 48000.0f));
+
+            juce::MidiBuffer midi;
+            juce::AudioBuffer<float> block (2, 512);
+
+            for (int offset = 0; offset + 512 <= buffer.getNumSamples(); offset += 512)
+            {
+                for (int channel = 0; channel < 2; ++channel)
+                    block.copyFrom (channel, 0, buffer, channel, offset, 512);
+
+                processor.processBlock (block, midi);
+
+                for (int channel = 0; channel < 2; ++channel)
+                    for (int sample = 0; sample < 512; ++sample)
+                        REQUIRE (std::isfinite (block.getSample (channel, sample)));
+            }
+        }
+    }
+}
+
+TEST_CASE ("T20: legacy user presets are migrated onto the Classic engines", "[presets][migration]")
+{
+    ScopedTestDirectory scratch;
+
+    const auto importFixture = [&scratch] (CryptaAudioProcessor& processor,
+                                            PresetManager& manager,
+                                            const juce::String& fixtureName)
+    {
+        const auto source = presetFixture (fixtureName);
+        REQUIRE (source.existsAsFile());
+
+        juce::String error;
+        const auto imported = manager.importPresetFile (source, error);
+        INFO ("import error: " << error);
+        REQUIRE (imported);
+        juce::ignoreUnused (processor);
+    };
+
+    SECTION ("a tuned v0.2.0 user preset")
+    {
+        CryptaAudioProcessor processor;
+        PresetManager manager (processor.apvts, makeIsolatedConfig (scratch.dir), makeTestFactoryPresetAssets());
+
+        importFixture (processor, manager, "preset_v020_user_tuned.json");
+
+        CHECK (choiceIndexOf (processor, ParamIDs::driveEngine) == 0);
+        CHECK (choiceIndexOf (processor, ParamIDs::lowCompDetector) == 0);
+        CHECK (choiceIndexOf (processor, ParamIDs::gateMode) == 0);
+
+        // Its own values still arrive intact.
+        CHECK (getParam (processor, ParamIDs::midDrive) == Catch::Approx (45.0f).margin (0.1f));
+        CHECK (getParam (processor, ParamIDs::highDrive) == Catch::Approx (65.0f).margin (0.1f));
+    }
+
+    SECTION ("a user-saved Default that shadows the factory one")
+    {
+        // The preset an existing user's fresh session actually boots into.
+        // Without the back-fill this is the case that would silently change
+        // someone's default sound.
+        CryptaAudioProcessor processor;
+        PresetManager manager (processor.apvts, makeIsolatedConfig (scratch.dir), makeTestFactoryPresetAssets());
+
+        importFixture (processor, manager, "preset_v020_user_default_shadow.json");
+
+        CHECK (choiceIndexOf (processor, ParamIDs::driveEngine) == 0);
+        CHECK (choiceIndexOf (processor, ParamIDs::lowCompDetector) == 0);
+        CHECK (choiceIndexOf (processor, ParamIDs::gateMode) == 0);
+    }
+
+    SECTION ("a preset with no pluginVersion key at all")
+    {
+        // Absent version counts as older than anything - the safe reading.
+        CryptaAudioProcessor processor;
+        PresetManager manager (processor.apvts, makeIsolatedConfig (scratch.dir), makeTestFactoryPresetAssets());
+
+        importFixture (processor, manager, "preset_noversion_user.json");
+
+        CHECK (choiceIndexOf (processor, ParamIDs::driveEngine) == 0);
+        CHECK (choiceIndexOf (processor, ParamIDs::lowCompDetector) == 0);
+        CHECK (choiceIndexOf (processor, ParamIDs::gateMode) == 0);
+    }
+}
+
+TEST_CASE ("T20: presets from v0.3.0 onwards are taken at their word", "[presets][migration]")
+{
+    ScopedTestDirectory scratch;
+
+    SECTION ("explicit Circuit values are not overridden")
+    {
+        CryptaAudioProcessor processor;
+        PresetManager manager (processor.apvts, makeIsolatedConfig (scratch.dir), makeTestFactoryPresetAssets());
+
+        const auto source = presetFixture ("preset_v030_user_circuit.json");
+        REQUIRE (source.existsAsFile());
+
+        juce::String error;
+        REQUIRE (manager.importPresetFile (source, error));
+
+        CHECK (choiceIndexOf (processor, ParamIDs::driveEngine) == 1);
+        CHECK (choiceIndexOf (processor, ParamIDs::lowCompDetector) == 1);
+        CHECK (choiceIndexOf (processor, ParamIDs::gateMode) == 1);
+        CHECK (getParam (processor, ParamIDs::highBias) == Catch::Approx (30.0f).margin (0.1f));
+    }
+
+    SECTION ("a v0.3.0 preset that omits a key keeps that key's default, not the legacy value")
+    {
+        // The gate is version-based, not merely key-presence-based. A preset
+        // saved by v0.3.0 that names driveEngine but omits the other two means
+        // "the others are at their defaults" - i.e. the new engines - and must
+        // not be dragged back to Classic.
+        CryptaAudioProcessor processor;
+        PresetManager manager (processor.apvts, makeIsolatedConfig (scratch.dir), makeTestFactoryPresetAssets());
+
+        const auto source = presetFixture ("preset_v030_user_partial.json");
+        REQUIRE (source.existsAsFile());
+
+        juce::String error;
+        REQUIRE (manager.importPresetFile (source, error));
+
+        CHECK (choiceIndexOf (processor, ParamIDs::driveEngine) == 0);      // as stated
+        CHECK (choiceIndexOf (processor, ParamIDs::lowCompDetector) == 1);  // default
+        CHECK (choiceIndexOf (processor, ParamIDs::gateMode) == 1);         // default
+    }
 }

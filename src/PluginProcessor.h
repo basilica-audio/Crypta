@@ -4,10 +4,13 @@
 #include <juce_dsp/juce_dsp.h>
 
 #include "dsp/BandEQ.h"
+#include "dsp/CircuitDrive.h"
 #include "dsp/Crossover.h"
 #include "dsp/IRLoader.h"
+#include "dsp/MeterTaps.h"
 #include "dsp/MidBand.h"
 #include "dsp/NoiseGateStage.h"
+#include "dsp/OutputClipper.h"
 #include "dsp/ParallelCompressor.h"
 #include "dsp/PhaseAlignFilter.h"
 #include "dsp/Voicing.h"
@@ -89,6 +92,11 @@ public:
     // load), never from processBlock() or any audio-thread callback.
     void loadImpulseResponse (juce::AudioBuffer<float> irBuffer, double irSampleRate);
 
+    // Lock-free metering, written by the audio thread and read by the UI (or
+    // by tests). See src/dsp/MeterTaps.h - reading is always safe, from any
+    // thread, at any time.
+    const cryp::MeterTaps& getMeterTaps() const noexcept { return meterTaps; }
+
     // Test-only observability seam (docs/design-brief.md guarantee #3: "Low
     // band never reaches the IR loader"). When non-null, processChunk()
     // copies the Low band's own fully-processed (post-compressor, post-
@@ -127,6 +135,28 @@ private:
     // resizing a buffer on the audio thread.
     void processChunk (juce::dsp::AudioBlock<float>& chunk) noexcept;
 
+    // The Mid+High section, once per engine. Classic reads `input` and writes
+    // the summed, post-IR-ready result to `output` (using the mid/high band
+    // buffers as scratch); Circuit works in place, because its two bands only
+    // exist inside its own oversampled region.
+    void processMidHighClassic (const juce::dsp::AudioBlock<const float>& input,
+                                 juce::dsp::AudioBlock<float>& output) noexcept;
+    void processMidHighCircuit (juce::dsp::AudioBlock<float>& block) noexcept;
+
+    // Equal-power fade from `outgoing` to `incoming`, advancing (and
+    // consuming) engineCrossfadeRemaining. `destination` may alias either
+    // source - each sample is written only after both inputs at that index
+    // have been read.
+    void applyEngineCrossfade (const juce::dsp::AudioBlock<const float>& outgoing,
+                                const juce::dsp::AudioBlock<const float>& incoming,
+                                juce::dsp::AudioBlock<float>& destination) noexcept;
+
+    // Writes the block's metering values into meterTaps. Block-rate only -
+    // nothing here touches the per-sample path.
+    void publishMeterTaps (const juce::dsp::AudioBlock<float>& output,
+                            size_t numChannels,
+                            size_t numSamples) noexcept;
+
     //==============================================================================
     juce::dsp::Gain<float> inputGainProcessor;
     juce::dsp::Gain<float> outputGainProcessor;
@@ -159,6 +189,34 @@ private:
     // oversampled distortion voicing (Gnaw/Wool/Razor), then level trim.
     cryp::Voicing highVoicing;
 
+    // v0.3.0 Circuit engine: replaces the midBand + highVoicing pair above
+    // with one shared oversampling region when driveEngine == Circuit. Both
+    // engines stay prepared at all times so switching between them is a
+    // branch, not a reallocation - and so the 64-sample crossfade below can
+    // run BOTH for the duration of a switch.
+    cryp::CircuitDrive circuitDrive;
+
+    // Constant-gain crossfade between the two drive engines, in samples
+    // remaining. Non-zero only immediately after a driveEngine change; while
+    // it runs, processChunk() renders the Mid+High section through both
+    // engines and fades between them, which is what keeps an automated or
+    // preset-driven engine switch from producing a step discontinuity.
+    //
+    // 256 samples rather than the brief's 64: the incoming engine is reset at
+    // the switch (see processChunk()) and therefore needs its own oversampling
+    // latency - around 30-40 samples at base rate - before it is producing
+    // full-level output at all. A 64-sample fade would still be handing it
+    // significant gain while it was ramping up from silence. 256 samples
+    // (5.3 ms at 48 kHz) keeps the incoming gain below 15 % until the engine
+    // has filled, and is still short enough to read as an instant switch.
+    static constexpr int engineCrossfadeLengthSamples = 256;
+    int engineCrossfadeRemaining = 0;
+    bool lastDriveEngineWasCircuit = true;
+
+    // Scratch for the crossfade's second engine render. Sized with the other
+    // band buffers in prepareToPlay().
+    juce::AudioBuffer<float> engineCrossfadeBuffer;
+
     // Per-band level trims applied after each band's own dynamics/drive/
     // voicing processing and before the bands are summed back together.
     juce::dsp::Gain<float> lowGainProcessor;
@@ -172,6 +230,26 @@ private:
     cryp::BandEQ eq;
     cryp::IRLoader irLoader;
 
+    // v0.3.0 safety clip: ADAA ceiling clip in delta form, replacing the raw
+    // base-rate std::tanh (see src/dsp/OutputClipper.h).
+    cryp::OutputClipper outputClipper;
+
+    // v0.3.0 metering backend (issue #13).
+    cryp::MeterTaps meterTaps;
+
+    // One-pole smoothing for the per-band level meters, ~300 ms so the
+    // display sits still. Block-rate is plenty for a 30 Hz UI.
+    float lowBandMeterLevel = 0.0f;
+    float midBandMeterLevel = 0.0f;
+    float highBandMeterLevel = 0.0f;
+
+    // Raw per-band RMS for the current chunk, written by whichever drive
+    // engine ran and consumed by the smoothing above. The Circuit engine's Mid
+    // and High bands are summed before it returns, so it has to report them
+    // itself rather than let processChunk() measure them.
+    float pendingMidBandLevel = 0.0f;
+    float pendingHighBandLevel = 0.0f;
+
     // Issue #9: upper bound on the latency this plugin will ever need to
     // compensate for, i.e. the largest oversampling latency the Mid+High
     // branch is expected to introduce. Generous headroom well above the
@@ -184,6 +262,19 @@ private:
     // compensation is always an integer number of samples, never a
     // fractionally modulated delay.
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> lowBandLatencyDelay { maxLatencyCompensationSamples };
+
+    // Pads the Circuit engine's output up to the Classic engine's latency.
+    //
+    // The two engines can report different latencies: Classic is always 4x
+    // oversampled, while Circuit drops to 2x above 50 kHz and to 1x above
+    // 100 kHz. Rather than re-reporting latency to the host whenever
+    // driveEngine changes - which hosts handle poorly mid-transport, and
+    // which would make an automated engine switch shift the plugin's timing -
+    // the plugin always reports the larger of the two and delays the Circuit
+    // path by the difference. Reported latency is then a function of sample
+    // rate alone, constant across engine switches, and the crossfade above
+    // fades between two paths that are already time-aligned.
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> circuitAlignDelay { maxLatencyCompensationSamples };
 
     // Pre-allocated band buffers, sized to `preparedBlockSize` in
     // prepareToPlay(). Never resized in processBlock(). remainderBandBuffer
@@ -248,6 +339,24 @@ private:
 
     std::atomic<float>* irEnabled = nullptr;
     std::atomic<float>* irMixPercent = nullptr;
+
+    // v0.3.0 "circuit-grade bass engine" parameters (see brief §4 /
+    // src/params/ParameterIds.h).
+    std::atomic<float>* driveEngineChoice = nullptr;
+    std::atomic<float>* highBiasPercent = nullptr;
+
+    std::atomic<float>* lowCompDetectorChoice = nullptr;
+    std::atomic<float>* lowCompKneeDb = nullptr;
+    std::atomic<float>* lowCompAutoReleaseFlag = nullptr;
+    std::atomic<float>* lowCompAutoMakeupFlag = nullptr;
+
+    std::atomic<float>* gateModeChoice = nullptr;
+    std::atomic<float>* gateHysteresisDb = nullptr;
+    std::atomic<float>* gateHoldMs = nullptr;
+    std::atomic<float>* gateScHpfHz = nullptr;
+    std::atomic<float>* gateRangeDb = nullptr;
+
+    std::atomic<float>* clipCeilingDb = nullptr;
 
     // The actual parameter object handed back from getBypassParameter() so
     // hosts can offer their own bypass UI/automation for this parameter.

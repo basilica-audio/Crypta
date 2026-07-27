@@ -1,0 +1,14 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.crypta",
+    "pluginVersion": "0.2.0",
+    "name": "Default",
+    "category": "Init",
+    "parameters": {
+        "splitLowHz": 100.0,
+        "splitHighHz": 500.0,
+        "midDrive": 20.0,
+        "highVoicing": 1.0,
+        "highDrive": 40.0
+    }
+}

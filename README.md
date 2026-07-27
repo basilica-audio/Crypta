@@ -21,7 +21,9 @@ Crypta is a Parallax-style bass plugin built on JUCE 8. As of v0.2.0 it splits y
 - **Two cascaded LR4 crossover splits** — Split Low (60–400 Hz, default 120 Hz) and Split High (300–2000 Hz, default 600 Hz), building a genuine 3-band (low/mid/high) topology, replacing v0.1.x's 2-band split
 - **Low band**: parallel "glue" compressor (re-sourced fast/gentle ballistics, ratio 2:1 / attack 3 ms / release 6 ms) with makeup gain, wet/dry mix, and output level
 - **Mid band** (NEW): staged/cascaded drive-only saturation, no filter/tone/blend — a distinct "throatier" character separate from the high band
-- **High band**: three distortion voicings, each 4x oversampled to keep aliasing under control, now with a shared, voicing-independent **Tight** pre-drive highpass (was Razor-only in v0.1.x)
+- **High band**: three distortion voicings, oversampled to keep aliasing under control, with a shared, voicing-independent **Tight** pre-drive highpass
+- **Circuit drive engine (v0.3.0)**: the mid and high bands rebuilt from circuit models with antiderivative antialiasing, sharing one oversampling region — measured 25–30 dB less aliasing than the previous engine, which ships on as the bit-identical `Classic` fallback
+- **Smooth RMS low-band detector and a Modern gate (v0.3.0)**: a log-domain RMS detector that stops the low band tremoloing on sustained notes, and a gate with hysteresis, hold, a sidechain highpass and a straight-line release
   - **Gnaw** — op-amp-style hard clip
   - **Wool** — cascaded soft-clip fuzz with a mid scoop
   - **Razor** — tight overdrive: soft clip, mid hump

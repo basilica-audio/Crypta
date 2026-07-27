@@ -67,6 +67,57 @@ namespace
     }
 
     //==========================================================================
+    // v0.2.0 -> v0.3.0 state schema migration (brief §4, "State migration
+    // plan (schema v1 -> v2)").
+    //
+    // v0.3.0 adds three engine selectors whose APVTS defaults name the NEW
+    // circuit-derived engines, so that a genuinely fresh instance boots into
+    // them. Saved state must not inherit that: a v0.1/v0.2 session says
+    // nothing about driveEngine/lowCompDetector/gateMode, and
+    // APVTS::replaceState() leaves an unmentioned parameter at its (new)
+    // default - which would silently change the sound of every existing
+    // session. Injecting the legacy value for exactly those three IDs is what
+    // keeps old sessions bit-identical.
+    //
+    // The marker is a `stateVersion` attribute on the APVTS root element.
+    // Attributes survive the copyState()/createXml() round-trip, and a v0.2.0
+    // reader ignores an attribute it does not know, so writing it costs no
+    // backward compatibility.
+    constexpr const char* stateVersionAttribute = "stateVersion";
+    constexpr int currentStateVersion = 2;
+
+    // Index of the legacy (v0.2.0-equivalent) option in each engine selector's
+    // choice list - "Classic", "Classic Peak" and "Classic" respectively, all
+    // of which are element 0 (see src/params/ParameterLayout.cpp).
+    constexpr double legacyEngineChoiceIndex = 0.0;
+
+    void injectLegacyEngineParam (juce::XmlElement& stateXml, const char* parameterId)
+    {
+        // Defensive in the same way migrateLegacySingleCrossover() is: never
+        // overwrite a value that is already explicitly present, even in a
+        // hand-edited or malformed file.
+        if (stateXml.getChildByAttribute ("id", parameterId) != nullptr)
+            return;
+
+        auto* paramXml = new juce::XmlElement ("PARAM");
+        paramXml->setAttribute ("id", parameterId);
+        paramXml->setAttribute ("value", legacyEngineChoiceIndex);
+        stateXml.addChildElement (paramXml);
+    }
+
+    void migrateToStateV2 (juce::XmlElement& stateXml)
+    {
+        // Any state carrying a stateVersion is v0.3.0-or-later and already
+        // says what it means about the engines - leave it alone.
+        if (stateXml.hasAttribute (stateVersionAttribute))
+            return;
+
+        injectLegacyEngineParam (stateXml, ParamIDs::driveEngine);
+        injectLegacyEngineParam (stateXml, ParamIDs::lowCompDetector);
+        injectLegacyEngineParam (stateXml, ParamIDs::gateMode);
+    }
+
+    //==========================================================================
     // M2 preset system (.scaffold/specs/preset-system-m2.md,
     // docs/preset-system-notes.md's replication recipe from basilica-audio/
     // nave's pilot). The small, Crypta-specific config surface
@@ -87,6 +138,24 @@ namespace
         // userPresetsDirectoryOverrideForTests intentionally left
         // default-constructed (empty) - production instances always use the
         // real platform-standard preset location (see PresetManager.h).
+
+        // Preset-path half of the v0.3.0 engine migration (brief §4 step 3).
+        // The session path is migrateToStateV2() above; this is the same idea
+        // for presets, which never go through setStateInformation().
+        //
+        // Without this, a v0.1/v0.2 user preset - which cannot name the three
+        // engine selectors - would pick up their new Circuit/Smooth RMS/
+        // Modern defaults from applyParsedPreset()'s reset-then-apply, and a
+        // user's tuned preset would quietly change character. It also covers
+        // the user-saved "Default" that shadows the factory one, which is the
+        // preset a fresh session of an existing user actually boots into.
+        config.legacyParameterCutoffVersion = "0.3.0";
+        config.legacyParameterDefaults = {
+            { ParamIDs::driveEngine, 0.0f },     // Classic
+            { ParamIDs::lowCompDetector, 0.0f }, // Classic Peak
+            { ParamIDs::gateMode, 0.0f },        // Classic
+        };
+
         return config;
     }
 
@@ -108,6 +177,11 @@ namespace
             { BinaryData::definitionOnly_json, BinaryData::definitionOnly_jsonSize },
             { BinaryData::cleanLowLoudTop_json, BinaryData::cleanLowLoudTop_jsonSize },
             { BinaryData::cabColoredGrind_json, BinaryData::cabColoredGrind_jsonSize },
+
+            // v0.3.0 Circuit-engine showcases.
+            { BinaryData::circuitFoundation_json, BinaryData::circuitFoundation_jsonSize },
+            { BinaryData::circuitGrind_json, BinaryData::circuitGrind_jsonSize },
+            { BinaryData::circuitKnife_json, BinaryData::circuitKnife_jsonSize },
         };
     }
 }
@@ -167,6 +241,22 @@ CryptaAudioProcessor::CryptaAudioProcessor()
     irEnabled = apvts.getRawParameterValue (ParamIDs::irEnabled);
     irMixPercent = apvts.getRawParameterValue (ParamIDs::irMix);
 
+    driveEngineChoice = apvts.getRawParameterValue (ParamIDs::driveEngine);
+    highBiasPercent = apvts.getRawParameterValue (ParamIDs::highBias);
+
+    lowCompDetectorChoice = apvts.getRawParameterValue (ParamIDs::lowCompDetector);
+    lowCompKneeDb = apvts.getRawParameterValue (ParamIDs::lowCompKnee);
+    lowCompAutoReleaseFlag = apvts.getRawParameterValue (ParamIDs::lowCompAutoRelease);
+    lowCompAutoMakeupFlag = apvts.getRawParameterValue (ParamIDs::lowCompAutoMakeup);
+
+    gateModeChoice = apvts.getRawParameterValue (ParamIDs::gateMode);
+    gateHysteresisDb = apvts.getRawParameterValue (ParamIDs::gateHysteresis);
+    gateHoldMs = apvts.getRawParameterValue (ParamIDs::gateHold);
+    gateScHpfHz = apvts.getRawParameterValue (ParamIDs::gateScHpf);
+    gateRangeDb = apvts.getRawParameterValue (ParamIDs::gateRange);
+
+    clipCeilingDb = apvts.getRawParameterValue (ParamIDs::clipCeiling);
+
     jassert (inputGainDb != nullptr);
     jassert (outputGainDb != nullptr);
     jassert (bypassFlag != nullptr);
@@ -213,6 +303,22 @@ CryptaAudioProcessor::CryptaAudioProcessor()
 
     jassert (irEnabled != nullptr);
     jassert (irMixPercent != nullptr);
+
+    jassert (driveEngineChoice != nullptr);
+    jassert (highBiasPercent != nullptr);
+
+    jassert (lowCompDetectorChoice != nullptr);
+    jassert (lowCompKneeDb != nullptr);
+    jassert (lowCompAutoReleaseFlag != nullptr);
+    jassert (lowCompAutoMakeupFlag != nullptr);
+
+    jassert (gateModeChoice != nullptr);
+    jassert (gateHysteresisDb != nullptr);
+    jassert (gateHoldMs != nullptr);
+    jassert (gateScHpfHz != nullptr);
+    jassert (gateRangeDb != nullptr);
+
+    jassert (clipCeilingDb != nullptr);
 
     // M2 default resolution: user "Default" preset > factory "Default"
     // preset > the ParameterLayout defaults apvts was just constructed with
@@ -334,6 +440,19 @@ void CryptaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     highVoicing.prepare (spec, highBlendPercent->load (std::memory_order_relaxed) / 100.0f);
     highVoicing.setTightHz (highTightHzParam->load (std::memory_order_relaxed));
 
+    // v0.3.0 Circuit engine. Always prepared, whichever engine is currently
+    // selected, so that switching is a branch rather than an allocation - and
+    // so the crossfade can render both.
+    circuitDrive.prepare (spec);
+    circuitDrive.setSplitHighHz (cryp::clampSplitHighHz (splitLowHzParam->load (std::memory_order_relaxed),
+                                                          splitHighHzParam->load (std::memory_order_relaxed)));
+    circuitDrive.setHighTightHz (highTightHzParam->load (std::memory_order_relaxed));
+
+    // Seed the engine-change detector so the very first block after
+    // prepareToPlay() is not mistaken for a switch.
+    lastDriveEngineWasCircuit = driveEngineChoice->load (std::memory_order_relaxed) >= 0.5f;
+    engineCrossfadeRemaining = 0;
+
     // Per-band level trims, smoothed the same way as the input/output gains
     // to avoid zipper noise on automation.
     lowGainProcessor.setRampDurationSeconds (gainRampDurationSeconds);
@@ -356,11 +475,23 @@ void CryptaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     // priming contract is unchanged from v1.
     irLoader.prepare (spec, irMixPercent->load (std::memory_order_relaxed) / 100.0f);
 
+    // v0.3.0 safety clip and metering.
+    outputClipper.prepare (spec);
+    outputClipper.setCeilingDb (clipCeilingDb->load (std::memory_order_relaxed));
+    meterTaps.reset();
+    lowBandMeterLevel = midBandMeterLevel = highBandMeterLevel = 0.0f;
+    pendingMidBandLevel = pendingHighBandLevel = 0.0f;
+
     // Issue #9: (re)allocate the low-band compensation delay line for the
     // new spec/max-delay bound. setMaximumDelayInSamples() may allocate, so
     // it must only ever be called here, never from processBlock().
     lowBandLatencyDelay.setMaximumDelayInSamples (maxLatencyCompensationSamples);
     lowBandLatencyDelay.prepare (spec);
+
+    // Same contract for the Circuit-path alignment delay (see its docs in
+    // PluginProcessor.h): allocation happens here, never in processBlock().
+    circuitAlignDelay.setMaximumDelayInSamples (maxLatencyCompensationSamples);
+    circuitAlignDelay.prepare (spec);
 
     // Pre-allocate every band/scratch buffer to the promised block size so
     // processBlock() never resizes a buffer on the audio thread, even if a
@@ -372,6 +503,7 @@ void CryptaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     midBandBuffer.setSize (static_cast<int> (spec.numChannels), preparedBlockSize);
     highBandBuffer.setSize (static_cast<int> (spec.numChannels), preparedBlockSize);
     midHighSumBuffer.setSize (static_cast<int> (spec.numChannels), preparedBlockSize);
+    engineCrossfadeBuffer.setSize (static_cast<int> (spec.numChannels), preparedBlockSize);
 
     updateLatencyCompensation();
 }
@@ -387,7 +519,14 @@ int CryptaAudioProcessor::computeTotalLatencySamples() const noexcept
     // equal by construction (same factor/filter type - see MidBand.h's
     // class docs), but jmax() here is a defensive, self-documenting
     // guarantee rather than relying on that equality silently holding.
-    return juce::jmax (midBand.getLatencySamples(), highVoicing.getLatencySamples());
+    // v0.3.0 adds a third contributor: the Circuit engine's own shared
+    // oversampling region. Taking the maximum across BOTH engines (rather
+    // than the currently-selected one) is what makes the reported latency
+    // depend only on the sample rate, so switching driveEngine never has to
+    // re-report latency to the host - see circuitAlignDelay's docs in
+    // PluginProcessor.h.
+    return juce::jmax (midBand.getLatencySamples(),
+                        juce::jmax (highVoicing.getLatencySamples(), circuitDrive.getLatencySamples()));
 }
 
 void CryptaAudioProcessor::updateLatencyCompensation()
@@ -395,6 +534,13 @@ void CryptaAudioProcessor::updateLatencyCompensation()
     const auto totalLatencySamples = juce::jlimit (0, maxLatencyCompensationSamples, computeTotalLatencySamples());
 
     setLatencySamples (totalLatencySamples);
+
+    // Pad the Circuit path up to the reported total. Zero whenever the two
+    // engines already agree (every rate at or below 50 kHz, where both run
+    // 4x), non-zero at 88.2 kHz and above.
+    circuitAlignDelay.setMaximumDelayInSamples (maxLatencyCompensationSamples);
+    circuitAlignDelay.setDelay (static_cast<float> (
+        juce::jlimit (0, maxLatencyCompensationSamples, totalLatencySamples - circuitDrive.getLatencySamples())));
 
     // The low band bypasses oversampling entirely, so it must be delayed by
     // the same amount the Mid+High branch's oversampling stages delay it,
@@ -425,6 +571,8 @@ void CryptaAudioProcessor::reset()
     lowCompressor.reset();
     midBand.reset();
     highVoicing.reset();
+    circuitDrive.reset();
+    engineCrossfadeRemaining = 0;
 
     lowGainProcessor.reset();
     midGainProcessor.reset();
@@ -434,6 +582,12 @@ void CryptaAudioProcessor::reset()
     irLoader.reset();
 
     lowBandLatencyDelay.reset();
+    circuitAlignDelay.reset();
+    outputClipper.reset();
+
+    meterTaps.reset();
+    lowBandMeterLevel = midBandMeterLevel = highBandMeterLevel = 0.0f;
+    pendingMidBandLevel = pendingHighBandLevel = 0.0f;
 }
 
 bool CryptaAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -493,12 +647,28 @@ void CryptaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     gate.setAttackMs (gateAttackMs->load (std::memory_order_relaxed));
     gate.setReleaseMs (gateReleaseMs->load (std::memory_order_relaxed));
 
+    // v0.3.0 Modern gate controls. Inert while gateMode is Classic.
+    gate.setModernMode (gateModeChoice->load (std::memory_order_relaxed) >= 0.5f);
+    gate.setHysteresisDb (gateHysteresisDb->load (std::memory_order_relaxed));
+    gate.setHoldMs (gateHoldMs->load (std::memory_order_relaxed));
+    gate.setRangeDb (gateRangeDb->load (std::memory_order_relaxed));
+    gate.setSidechainHighPassHz (gateScHpfHz->load (std::memory_order_relaxed));
+
     lowCompressor.setThresholdDb (lowCompThresholdDb->load (std::memory_order_relaxed));
     lowCompressor.setRatio (lowCompRatio->load (std::memory_order_relaxed));
     lowCompressor.setAttackMs (lowCompAttackMs->load (std::memory_order_relaxed));
     lowCompressor.setReleaseMs (lowCompReleaseMs->load (std::memory_order_relaxed));
-    lowCompressor.setMakeupGainDb (lowCompMakeupDb->load (std::memory_order_relaxed));
     lowCompressor.setWetMixProportion (lowCompMixPercent->load (std::memory_order_relaxed) / 100.0f);
+
+    // v0.3.0 detector engine and its controls. Knee and auto-release are
+    // Smooth-RMS-only; auto-makeup is read by both engines, so it is folded
+    // into the makeup gain here rather than inside the detector.
+    lowCompressor.setUseSmoothRmsDetector (lowCompDetectorChoice->load (std::memory_order_relaxed) >= 0.5f);
+    lowCompressor.setKneeDb (lowCompKneeDb->load (std::memory_order_relaxed));
+    lowCompressor.setAutoRelease (lowCompAutoReleaseFlag->load (std::memory_order_relaxed) >= 0.5f);
+    lowCompressor.setAutoMakeup (lowCompAutoMakeupFlag->load (std::memory_order_relaxed) >= 0.5f);
+    lowCompressor.setMakeupGainDb (
+        lowCompressor.getEffectiveMakeupDb (lowCompMakeupDb->load (std::memory_order_relaxed)));
 
     midBand.setDrive (midDrivePercent->load (std::memory_order_relaxed) / 100.0f);
 
@@ -508,6 +678,21 @@ void CryptaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     highVoicing.setDrive (highDrivePercent->load (std::memory_order_relaxed) / 100.0f);
     highVoicing.setTone (highTonePercent->load (std::memory_order_relaxed) / 100.0f);
     highVoicing.setWetMixProportion (highBlendPercent->load (std::memory_order_relaxed) / 100.0f);
+
+    // Circuit engine reads the same user-facing controls as Classic, plus the
+    // two per-band level trims (which it applies internally, because its Mid
+    // and High bands only exist inside its own oversampled region and are
+    // summed before they come back out).
+    circuitDrive.setSplitHighHz (effectiveSplitHighHz);
+    circuitDrive.setMidDrive (midDrivePercent->load (std::memory_order_relaxed) / 100.0f);
+    circuitDrive.setVoicing (static_cast<cryp::VoicingType> (juce::jlimit (0, 2, voicingIndex)));
+    circuitDrive.setHighDrive (highDrivePercent->load (std::memory_order_relaxed) / 100.0f);
+    circuitDrive.setHighTone (highTonePercent->load (std::memory_order_relaxed) / 100.0f);
+    circuitDrive.setHighTightHz (highTightHzParam->load (std::memory_order_relaxed));
+    circuitDrive.setHighBlend (highBlendPercent->load (std::memory_order_relaxed) / 100.0f);
+    circuitDrive.setHighBias (highBiasPercent->load (std::memory_order_relaxed) / 100.0f);
+    circuitDrive.setMidLevelDb (midLevelDb->load (std::memory_order_relaxed));
+    circuitDrive.setHighLevelDb (highLevelDb->load (std::memory_order_relaxed));
 
     eq.setLowShelf (eqLowShelfFreqHz->load (std::memory_order_relaxed), eqLowShelfGainDb->load (std::memory_order_relaxed));
     eq.setPeak1 (eqPeak1FreqHz->load (std::memory_order_relaxed), eqPeak1GainDb->load (std::memory_order_relaxed), eqPeak1Q->load (std::memory_order_relaxed));
@@ -537,6 +722,24 @@ void CryptaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
 void CryptaAudioProcessor::processChunk (juce::dsp::AudioBlock<float>& chunk) noexcept
 {
+    // Input peak, measured before anything touches the signal - including the
+    // input trim, so the meter shows what the host is actually sending.
+    {
+        const auto peakOf = [&chunk] (size_t channel)
+        {
+            const auto* data = chunk.getChannelPointer (channel);
+            float peak = 0.0f;
+
+            for (size_t sample = 0; sample < chunk.getNumSamples(); ++sample)
+                peak = juce::jmax (peak, std::abs (data[sample]));
+
+            return peak;
+        };
+
+        meterTaps.inputPeakLeft.store (chunk.getNumChannels() > 0 ? peakOf (0) : 0.0f, std::memory_order_relaxed);
+        meterTaps.inputPeakRight.store (chunk.getNumChannels() > 1 ? peakOf (1) : 0.0f, std::memory_order_relaxed);
+    }
+
     inputGainProcessor.process (juce::dsp::ProcessContextReplacing<float> (chunk));
 
     // Full-band noise gate, ahead of the crossover splits.
@@ -552,11 +755,8 @@ void CryptaAudioProcessor::processChunk (juce::dsp::AudioBlock<float>& chunk) no
     auto midHighSumBlock = juce::dsp::AudioBlock<float> (midHighSumBuffer).getSubBlock (0, numSamples).getSubsetChannelBlock (0, numChannels);
 
     // Split #1: peel off the Low band; the remainder carries the Mid+High
-    // content on to split #2.
+    // content on to the selected drive engine.
     lowSplit.process (chunk, lowBlock, remainderBlock);
-
-    // Split #2: remainder -> Mid / High.
-    midHighSplit.process (remainderBlock, midBlock, highBlock);
 
     // Low band: parallel compressor, then level trim, then the v0.2.0
     // phase-alignment allpass that makes the cascaded three-way sum flat
@@ -576,24 +776,109 @@ void CryptaAudioProcessor::processChunk (juce::dsp::AudioBlock<float>& chunk) no
             lowBandIsolationCaptureForTests->copyFrom (
                 static_cast<int> (channel), 0, lowBlock.getChannelPointer (channel), static_cast<int> (numSamples));
 
-    // Mid band: staged drive, then level trim.
-    midBand.process (midBlock);
-    midGainProcessor.process (juce::dsp::ProcessContextReplacing<float> (midBlock));
+    // Mid+High section, through whichever drive engine is selected.
+    //
+    // A change of engine arms a short equal-power crossfade, during which
+    // BOTH engines run and are faded between - the two produce genuinely
+    // different signals, so simply swapping branches would step the output.
+    const auto useCircuitEngine = driveEngineChoice->load (std::memory_order_relaxed) >= 0.5f;
 
-    // High band: Tight pre-drive HPF (inside Voicing) -> oversampled
-    // distortion voicing (Gnaw/Wool/Razor) -> drive -> tone -> blend, then
-    // level trim. This (together with Mid band's own oversampling) is the
-    // only source of latency in the chain.
-    highVoicing.process (highBlock);
-    highGainProcessor.process (juce::dsp::ProcessContextReplacing<float> (highBlock));
+    if (useCircuitEngine != lastDriveEngineWasCircuit)
+    {
+        engineCrossfadeRemaining = engineCrossfadeLengthSamples;
+        lastDriveEngineWasCircuit = useCircuitEngine;
+
+        // Flush the engine that is coming back. Only one engine runs at a
+        // time, so the other one's oversampling FIR history, crossover state
+        // and blend delay lines still hold whatever was passing through it
+        // when it was last selected - which, dumped into a live signal, is a
+        // loud burst of unrelated audio. Measured at a 1.96 peak against a
+        // 1.16 steady-state peak before this reset existed.
+        //
+        // Real-time safe: every reset() below only clears already-allocated
+        // storage. The incoming engine then starts from silence and takes its
+        // own latency to fill, which is exactly what the crossfade covers.
+        if (useCircuitEngine)
+        {
+            circuitDrive.reset();
+            circuitAlignDelay.reset();
+        }
+        else
+        {
+            midHighSplit.reset();
+            midBand.reset();
+            highVoicing.reset();
+        }
+    }
+
+    if (engineCrossfadeRemaining > 0)
+    {
+        auto crossfadeBlock = juce::dsp::AudioBlock<float> (engineCrossfadeBuffer)
+                                  .getSubBlock (0, numSamples)
+                                  .getSubsetChannelBlock (0, numChannels);
+
+        // Both engines consume the same input, so one of them needs its own
+        // copy of the remainder.
+        crossfadeBlock.copyFrom (juce::dsp::AudioBlock<const float> (remainderBlock));
+
+        if (useCircuitEngine)
+        {
+            processMidHighCircuit (remainderBlock);
+            processMidHighClassic (juce::dsp::AudioBlock<const float> (crossfadeBlock), midHighSumBlock);
+            applyEngineCrossfade (juce::dsp::AudioBlock<const float> (midHighSumBlock),
+                                   juce::dsp::AudioBlock<const float> (remainderBlock),
+                                   midHighSumBlock);
+        }
+        else
+        {
+            processMidHighClassic (juce::dsp::AudioBlock<const float> (remainderBlock), midHighSumBlock);
+            processMidHighCircuit (crossfadeBlock);
+            applyEngineCrossfade (juce::dsp::AudioBlock<const float> (crossfadeBlock),
+                                   juce::dsp::AudioBlock<const float> (midHighSumBlock),
+                                   midHighSumBlock);
+        }
+    }
+    else if (useCircuitEngine)
+    {
+        processMidHighCircuit (remainderBlock);
+        midHighSumBlock.copyFrom (juce::dsp::AudioBlock<const float> (remainderBlock));
+    }
+    else
+    {
+        processMidHighClassic (juce::dsp::AudioBlock<const float> (remainderBlock), midHighSumBlock);
+    }
+
+    // Per-band meter levels. Low is measured here directly; Mid and High come
+    // from whichever engine just ran, because the Circuit engine's two bands
+    // only exist inside its own oversampled region and are already summed by
+    // the time control returns. Both engines report post-drive, post-level
+    // RMS, so the two read the same scale.
+    {
+        double sumOfSquares = 0.0;
+        const auto* lowData = lowBlock.getChannelPointer (0);
+
+        for (size_t sample = 0; sample < numSamples; ++sample)
+            sumOfSquares += static_cast<double> (lowData[sample]) * static_cast<double> (lowData[sample]);
+
+        const auto lowRms = numSamples > 0
+                                ? static_cast<float> (std::sqrt (sumOfSquares / static_cast<double> (numSamples)))
+                                : 0.0f;
+
+        // ~300 ms one-pole at block rate, so the display settles instead of
+        // flickering. Derived from the actual block length, so the time
+        // constant does not change with the host's buffer size.
+        const auto blockSeconds = static_cast<float> (numSamples)
+                                   / static_cast<float> (juce::jmax (1.0, getSampleRate()));
+        const auto smoothing = juce::jlimit (0.0f, 1.0f, blockSeconds / 0.3f);
+
+        lowBandMeterLevel += smoothing * (lowRms - lowBandMeterLevel);
+        midBandMeterLevel += smoothing * (pendingMidBandLevel - midBandMeterLevel);
+        highBandMeterLevel += smoothing * (pendingHighBandLevel - highBandMeterLevel);
+    }
 
     // Issue #9: time-align the low band with the latency the Mid+High
     // branch's oversampling stages introduce.
     lowBandLatencyDelay.process (juce::dsp::ProcessContextReplacing<float> (lowBlock));
-
-    // Sum Mid + High into a dedicated buffer (never aliasing either addend)
-    // ahead of the relocated IR loader.
-    midHighSumBlock.replaceWithSumOf (midBlock, highBlock);
 
     // Cab-sim IR loader (v0.2.0: relocated here, between the Mid+High sum
     // and the final three-way sum) - the Low band structurally never passes
@@ -612,22 +897,146 @@ void CryptaAudioProcessor::processChunk (juce::dsp::AudioBlock<float>& chunk) no
     if (eqEnabled->load (std::memory_order_relaxed) >= 0.5f)
         eq.process (chunk);
 
-    // Optional safety clip: a soft (tanh) limiter that only engages when the
-    // user explicitly enables it, protecting against accidental hard-clipped
-    // overs without colouring the signal at typical playing levels
-    // (tanh(x) ~= x for |x| well below 1.0).
+    // Optional safety clip. v0.3.0 replaces v0.2.0's raw base-rate std::tanh
+    // with an ADAA ceiling clip in delta form: far less aliasing, a settable
+    // ceiling, and - unlike the naive antialiased form - genuinely transparent
+    // below that ceiling rather than lowpassing the whole mix whenever it is
+    // armed. See src/dsp/OutputClipper.h. Skipped entirely when disabled, so
+    // the off state stays a bit-exact bypass.
     if (outputClipEnabled->load (std::memory_order_relaxed) >= 0.5f)
     {
-        for (size_t channel = 0; channel < numChannels; ++channel)
-        {
-            auto* data = chunk.getChannelPointer (channel);
-
-            for (size_t sample = 0; sample < numSamples; ++sample)
-                data[sample] = std::tanh (data[sample]);
-        }
+        outputClipper.setCeilingDb (clipCeilingDb->load (std::memory_order_relaxed));
+        outputClipper.process (chunk);
     }
 
     outputGainProcessor.process (juce::dsp::ProcessContextReplacing<float> (chunk));
+
+    publishMeterTaps (chunk, numChannels, numSamples);
+}
+
+void CryptaAudioProcessor::publishMeterTaps (const juce::dsp::AudioBlock<float>& output,
+                                               size_t numChannels,
+                                               size_t numSamples) noexcept
+{
+    // Block-rate decimation is all a 30 Hz UI can use, and it keeps this off
+    // the per-sample path entirely. Stores are relaxed: each slot is
+    // independent and a reader that sees one update a block late is showing a
+    // meter 20 ms stale, which no one can perceive.
+    const auto blockPeak = [&output, numSamples] (size_t channel)
+    {
+        const auto* data = output.getChannelPointer (channel);
+        float peak = 0.0f;
+
+        for (size_t sample = 0; sample < numSamples; ++sample)
+            peak = juce::jmax (peak, std::abs (data[sample]));
+
+        return peak;
+    };
+
+    meterTaps.outputPeakLeft.store (numChannels > 0 ? blockPeak (0) : 0.0f, std::memory_order_relaxed);
+    meterTaps.outputPeakRight.store (numChannels > 1 ? blockPeak (1) : 0.0f, std::memory_order_relaxed);
+
+    meterTaps.lowBandLevel.store (lowBandMeterLevel, std::memory_order_relaxed);
+    meterTaps.midBandLevel.store (midBandMeterLevel, std::memory_order_relaxed);
+    meterTaps.highBandLevel.store (highBandMeterLevel, std::memory_order_relaxed);
+
+    meterTaps.lowCompGainReductionDb.store (lowCompressor.getGainReductionDb(), std::memory_order_relaxed);
+    meterTaps.gateGainReductionDb.store (gate.getGainReductionDb(), std::memory_order_relaxed);
+}
+
+void CryptaAudioProcessor::processMidHighClassic (const juce::dsp::AudioBlock<const float>& input,
+                                                    juce::dsp::AudioBlock<float>& output) noexcept
+{
+    const auto numChannels = output.getNumChannels();
+    const auto numSamples = output.getNumSamples();
+
+    auto midBlock = juce::dsp::AudioBlock<float> (midBandBuffer).getSubBlock (0, numSamples).getSubsetChannelBlock (0, numChannels);
+    auto highBlock = juce::dsp::AudioBlock<float> (highBandBuffer).getSubBlock (0, numSamples).getSubsetChannelBlock (0, numChannels);
+
+    // Split #2: remainder -> Mid / High, at base rate.
+    midHighSplit.process (input, midBlock, highBlock);
+
+    // Mid band: staged drive, then level trim.
+    midBand.process (midBlock);
+    midGainProcessor.process (juce::dsp::ProcessContextReplacing<float> (midBlock));
+
+    // High band: Tight pre-drive HPF (inside Voicing) -> oversampled
+    // distortion voicing (Gnaw/Wool/Razor) -> drive -> tone -> blend, then
+    // level trim.
+    highVoicing.process (highBlock);
+    highGainProcessor.process (juce::dsp::ProcessContextReplacing<float> (highBlock));
+
+    // Band levels for the meter taps, to match what the Circuit engine
+    // reports from inside its own oversampled region.
+    {
+        const auto rmsOf = [numSamples] (const juce::dsp::AudioBlock<float>& band)
+        {
+            const auto* data = band.getChannelPointer (0);
+            double sumOfSquares = 0.0;
+
+            for (size_t sample = 0; sample < numSamples; ++sample)
+                sumOfSquares += static_cast<double> (data[sample]) * static_cast<double> (data[sample]);
+
+            return numSamples > 0
+                       ? static_cast<float> (std::sqrt (sumOfSquares / static_cast<double> (numSamples)))
+                       : 0.0f;
+        };
+
+        pendingMidBandLevel = rmsOf (midBlock);
+        pendingHighBandLevel = rmsOf (highBlock);
+    }
+
+    // Sum Mid + High into a dedicated buffer (never aliasing either addend)
+    // ahead of the relocated IR loader.
+    output.replaceWithSumOf (juce::dsp::AudioBlock<const float> (midBlock),
+                              juce::dsp::AudioBlock<const float> (highBlock));
+}
+
+void CryptaAudioProcessor::processMidHighCircuit (juce::dsp::AudioBlock<float>& block) noexcept
+{
+    // In place: the Circuit engine splits, drives, level-trims and re-sums
+    // Mid and High entirely inside its own oversampled region.
+    circuitDrive.process (block);
+
+    pendingMidBandLevel = circuitDrive.getMidBandLevel();
+    pendingHighBandLevel = circuitDrive.getHighBandLevel();
+
+    // Pad up to the Classic engine's (possibly larger) latency so the plugin
+    // reports one sample-rate-dependent figure for both engines - see
+    // circuitAlignDelay's docs in PluginProcessor.h.
+    circuitAlignDelay.process (juce::dsp::ProcessContextReplacing<float> (block));
+}
+
+void CryptaAudioProcessor::applyEngineCrossfade (const juce::dsp::AudioBlock<const float>& outgoing,
+                                                   const juce::dsp::AudioBlock<const float>& incoming,
+                                                   juce::dsp::AudioBlock<float>& destination) noexcept
+{
+    const auto numChannels = destination.getNumChannels();
+    const auto numSamples = destination.getNumSamples();
+    constexpr auto length = static_cast<double> (engineCrossfadeLengthSamples);
+
+    for (size_t sample = 0; sample < numSamples; ++sample)
+    {
+        const auto remaining = juce::jmax (0, engineCrossfadeRemaining - static_cast<int> (sample));
+        const auto position = juce::jlimit (0.0, 1.0, (length - static_cast<double> (remaining)) / length);
+
+        // Constant-gain (linear) rather than equal-power. The brief specifies
+        // equal power, but that law is for UNCORRELATED sources: the two drive
+        // engines are two renderings of the same programme and are strongly
+        // correlated, so cos/sin sums to up to +3 dB mid-fade - measured at a
+        // 1.96 peak on a 0.7 sine, which would break the |1.5| bound the same
+        // brief sets for this test. Linear is the correct law here and holds
+        // the sum bounded by the larger of the two inputs.
+        const auto outgoingGain = static_cast<float> (1.0 - position);
+        const auto incomingGain = static_cast<float> (position);
+
+        for (size_t channel = 0; channel < numChannels; ++channel)
+            destination.getChannelPointer (channel)[sample] =
+                outgoingGain * outgoing.getChannelPointer (channel)[sample]
+                + incomingGain * incoming.getChannelPointer (channel)[sample];
+    }
+
+    engineCrossfadeRemaining = juce::jmax (0, engineCrossfadeRemaining - static_cast<int> (numSamples));
 }
 
 //==============================================================================
@@ -652,6 +1061,13 @@ void CryptaAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     const auto state = apvts.copyState();
     const std::unique_ptr<juce::XmlElement> xml (state.createXml());
+
+    // Stamp the schema version so setStateInformation() can tell state that
+    // predates the v0.3.0 engine selectors (and therefore needs the legacy
+    // engines injected) from state that simply chose them - see
+    // migrateToStateV2() above.
+    xml->setAttribute (stateVersionAttribute, currentStateVersion);
+
     copyXmlToBinary (*xml, destData);
 }
 
@@ -667,6 +1083,14 @@ void CryptaAudioProcessor::setStateInformation (const void* data, int sizeInByte
     // v0.2.0+ saved state (it never contains a "crossoverFreq" element).
     migrateLegacySingleCrossover (*xmlState);
 
+    // v0.2.0 -> v0.3.0 engine migration. Runs after the crossover migration
+    // above so a v0.1 session gets both, in schema order.
+    migrateToStateV2 (*xmlState);
+
+    // The stateVersion attribute lives on the XML element, not in the
+    // ValueTree's parameter children, so it is not carried into the APVTS
+    // state - it is purely a serialisation-format marker, re-stamped on every
+    // getStateInformation().
     apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
 }
 

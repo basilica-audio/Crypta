@@ -47,6 +47,26 @@ namespace
         auto* param = requireParam (apvts, id);
         CHECK (param->getDefaultValue() == Catch::Approx (expectedDefault ? 1.0f : 0.0f));
     }
+
+    // Asserts a juce::AudioParameterChoice's default *index*. Choice
+    // parameters normalise as index/(numChoices-1), so comparing the raw
+    // normalised default would silently depend on the choice count - going
+    // through getIndex() after resetting to the default keeps the assertion
+    // about the option actually selected.
+    void checkChoiceDefault (juce::AudioProcessorValueTreeState& apvts,
+                              const juce::String& id,
+                              int expectedDefaultIndex)
+    {
+        // getDefaultValue() is private on AudioParameterChoice itself, so the
+        // default is read through the RangedAudioParameter base (where it is
+        // public) before casting down for getIndex().
+        auto* ranged = requireParam (apvts, id);
+        auto* choice = dynamic_cast<juce::AudioParameterChoice*> (ranged);
+        REQUIRE (choice != nullptr);
+
+        ranged->setValueNotifyingHost (ranged->getDefaultValue());
+        CHECK (choice->getIndex() == expectedDefaultIndex);
+    }
 }
 
 TEST_CASE ("Processor instantiates with the expected parameters", "[processor][parameters]")
@@ -75,17 +95,62 @@ TEST_CASE ("Processor instantiates with the expected parameters", "[processor][p
             ParamIDs::eqPeak1Gain,      ParamIDs::eqPeak1Q,         ParamIDs::eqPeak2Freq,
             ParamIDs::eqPeak2Gain,      ParamIDs::eqPeak2Q,         ParamIDs::eqHighShelfFreq,
             ParamIDs::eqHighShelfGain,  ParamIDs::irEnabled,        ParamIDs::irMix,
+
+            // v0.3.0 circuit-grade bass engine additions.
+            ParamIDs::driveEngine,      ParamIDs::highBias,         ParamIDs::lowCompDetector,
+            ParamIDs::lowCompKnee,      ParamIDs::lowCompAutoRelease, ParamIDs::lowCompAutoMakeup,
+            ParamIDs::gateMode,         ParamIDs::gateHysteresis,   ParamIDs::gateHold,
+            ParamIDs::gateScHpf,        ParamIDs::gateRange,        ParamIDs::clipCeiling,
         };
 
         for (const auto* id : allIds)
             CHECK (apvts.getParameter (id) != nullptr);
     }
 
-    SECTION ("total parameter count matches the full v0.2.0 3-band layout")
+    SECTION ("total parameter count matches the full v0.3.0 layout")
     {
-        // 4 IO/global + 5 gate + 2 crossover + 7 low band + 2 mid band
-        // + 6 high band + 11 EQ + 2 IR = 39.
-        CHECK (apvts.processor.getParameters().size() == 39);
+        // v0.2.0's 39 (4 IO/global + 5 gate + 2 crossover + 7 low band
+        // + 2 mid band + 6 high band + 11 EQ + 2 IR) plus v0.3.0's 12
+        // circuit-engine additions (2 drive engine + 4 low comp detector
+        // + 5 gate mode + 1 clip ceiling) = 51.
+        CHECK (apvts.processor.getParameters().size() == 51);
+    }
+
+    SECTION ("v0.3.0 engine selectors default to the new circuit engines")
+    {
+        // A FRESH instance boots into the new engines - that is the point of
+        // the release. Existing sessions and presets never see these defaults
+        // (see StateMigrationTests / PresetManagerTests for the two injection
+        // paths that keep legacy work on the Classic engines).
+        checkChoiceDefault (apvts, ParamIDs::driveEngine, 1);      // Circuit
+        checkChoiceDefault (apvts, ParamIDs::lowCompDetector, 1);  // Smooth RMS
+        checkChoiceDefault (apvts, ParamIDs::gateMode, 1);         // Modern
+    }
+
+    SECTION ("v0.3.0 engine parameter defaults and ranges")
+    {
+        // highBias, autoMakeup and clipCeiling are the three that must be
+        // NEUTRAL: highBias 0 % is the symmetric v0.2.0 character, autoMakeup
+        // off is a no-op, and a 0 dBFS ceiling is v0.2.0's implicit unity.
+        checkFloatDefault (apvts, ParamIDs::highBias, 0.0f);
+        checkBoolDefault (apvts, ParamIDs::lowCompAutoMakeup, false);
+        checkFloatDefault (apvts, ParamIDs::clipCeiling, 0.0f);
+
+        // The rest are engine-gated, so non-neutral defaults are safe.
+        checkFloatDefault (apvts, ParamIDs::lowCompKnee, 6.0f);
+        checkBoolDefault (apvts, ParamIDs::lowCompAutoRelease, true);
+        checkFloatDefault (apvts, ParamIDs::gateHysteresis, 4.0f);
+        checkFloatDefault (apvts, ParamIDs::gateHold, 20.0f);
+        checkFloatDefault (apvts, ParamIDs::gateScHpf, 80.0f);
+        checkFloatDefault (apvts, ParamIDs::gateRange, 60.0f);
+
+        checkFloatRange (apvts, ParamIDs::highBias, 0.0f, 100.0f);
+        checkFloatRange (apvts, ParamIDs::lowCompKnee, 0.0f, 18.0f);
+        checkFloatRange (apvts, ParamIDs::gateHysteresis, 0.0f, 12.0f);
+        checkFloatRange (apvts, ParamIDs::gateHold, 0.0f, 500.0f);
+        checkFloatRange (apvts, ParamIDs::gateScHpf, 20.0f, 400.0f);
+        checkFloatRange (apvts, ParamIDs::gateRange, 6.0f, 90.0f);
+        checkFloatRange (apvts, ParamIDs::clipCeiling, -12.0f, 0.0f);
     }
 
     SECTION ("IO / global defaults")

@@ -341,6 +341,112 @@ namespace cryp
             100.0f,
             juce::AudioParameterFloatAttributes().withLabel ("%")));
 
+        //======================================================================
+        // v0.3.0 "circuit-grade bass engine" (12 new parameters, 39 -> 51).
+        //
+        // The three engine selectors default to the NEW engines. That is the
+        // fresh-instance behaviour; it is NOT a change for anyone with saved
+        // work, because both legacy entry points inject the Classic value:
+        // host sessions via CryptaAudioProcessor::migrateToStateV2() and
+        // presets via PresetManager's version-gated engine injection. See
+        // src/params/ParameterIds.h for the full rationale.
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { ParamIDs::driveEngine, 1 },
+            "Drive Engine",
+            juce::StringArray { "Classic", "Circuit" },
+            1));
+
+        // Even-harmonic control for the Circuit high-band clipper: adds a DC
+        // offset ahead of the shaper (removed again by a 10 Hz blocker), so
+        // 0 % is exactly the symmetric character v0.2.0 had. Inert in Classic.
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::highBias, 1 },
+            "High Bias",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
+            0.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("%")));
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { ParamIDs::lowCompDetector, 1 },
+            "Low Comp Detector",
+            juce::StringArray { "Classic Peak", "Smooth RMS" },
+            1));
+
+        // Soft-knee width for the Smooth RMS detector's gain computer
+        // (quadratic interpolation across the knee; 0 dB = hard knee).
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::lowCompKnee, 1 },
+            "Low Comp Knee",
+            juce::NormalisableRange<float> (0.0f, 18.0f, 0.01f),
+            6.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("dB")));
+
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { ParamIDs::lowCompAutoRelease, 1 },
+            "Low Comp Auto Release",
+            true));
+
+        // Read by BOTH detector engines (unlike knee/auto-release), so it
+        // defaults off - the one genuinely neutral choice for a parameter
+        // that is live on the legacy path too.
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { ParamIDs::lowCompAutoMakeup, 1 },
+            "Low Comp Auto Makeup",
+            false));
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { ParamIDs::gateMode, 1 },
+            "Gate Mode",
+            juce::StringArray { "Classic", "Modern" },
+            1));
+
+        // How far below the open threshold the signal must fall before the
+        // Modern gate starts to close - the anti-chatter margin.
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::gateHysteresis, 1 },
+            "Gate Hysteresis",
+            juce::NormalisableRange<float> (0.0f, 12.0f, 0.01f),
+            4.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("dB")));
+
+        // Skewed rather than makeLogTimeRange()'d: the spec'd range starts at
+        // exactly 0 ms ("no hold"), and juce::mapToLog10 requires a strictly
+        // positive lower bound. A 0.35 skew gives the same
+        // more-resolution-at-the-short-end feel while keeping 0 reachable.
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::gateHold, 1 },
+            "Gate Hold",
+            juce::NormalisableRange<float> (0.0f, 500.0f, 0.01f, 0.35f),
+            20.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("ms")));
+
+        // Detector-path only: keeps the bass fundamental from holding the
+        // gate open on an otherwise silent string.
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::gateScHpf, 1 },
+            "Gate SC Highpass",
+            makeLogFrequencyRange (20.0f, 400.0f),
+            80.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("Hz")));
+
+        // Floor of the Modern gate's dB-linear release ramp (how far down a
+        // fully closed gate attenuates), and the numerator of its slope.
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::gateRange, 1 },
+            "Gate Range",
+            juce::NormalisableRange<float> (6.0f, 90.0f, 0.01f),
+            60.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("dB")));
+
+        // Ceiling of the v0.3.0 safety clip. Read only while outputClip is
+        // on; 0 dBFS reproduces v0.2.0's implicit unity ceiling.
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::clipCeiling, 1 },
+            "Clip Ceiling",
+            juce::NormalisableRange<float> (-12.0f, 0.0f, 0.01f),
+            0.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("dBFS")));
+
         return layout;
     }
 }

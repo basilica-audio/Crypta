@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<PARAMETERS>
+  <PARAM id="bypass" value="0.0"/>
+  <PARAM id="eqEnabled" value="1.0"/>
+  <PARAM id="eqHighShelfFreq" value="5000.0009765625"/>
+  <PARAM id="eqHighShelfGain" value="-4.023313522338867e-7"/>
+  <PARAM id="eqLowShelfFreq" value="80.0"/>
+  <PARAM id="eqLowShelfGain" value="-4.023313522338867e-7"/>
+  <PARAM id="eqPeak1Freq" value="800.0"/>
+  <PARAM id="eqPeak1Gain" value="3.999999523162842"/>
+  <PARAM id="eqPeak1Q" value="0.699999988079071"/>
+  <PARAM id="eqPeak2Freq" value="2800.00048828125"/>
+  <PARAM id="eqPeak2Gain" value="-4.023313522338867e-7"/>
+  <PARAM id="eqPeak2Q" value="0.699999988079071"/>
+  <PARAM id="gateAttack" value="1.0"/>
+  <PARAM id="gateEnabled" value="1.0"/>
+  <PARAM id="gateRatio" value="10.0"/>
+  <PARAM id="gateRelease" value="100.0"/>
+  <PARAM id="gateThreshold" value="-40.0"/>
+  <PARAM id="highBlend" value="85.0"/>
+  <PARAM id="highDrive" value="70.0"/>
+  <PARAM id="highLevel" value="-5.364418029785156e-7"/>
+  <PARAM id="highTightHz" value="119.9999847412109"/>
+  <PARAM id="highTone" value="60.0"/>
+  <PARAM id="highVoicing" value="0.0"/>
+  <PARAM id="inputGain" value="-5.364418029785156e-7"/>
+  <PARAM id="irEnabled" value="0.0"/>
+  <PARAM id="irMix" value="100.0"/>
+  <PARAM id="lowCompAttack" value="2.999999761581421"/>
+  <PARAM id="lowCompMakeup" value="2.999999761581421"/>
+  <PARAM id="lowCompMix" value="80.0"/>
+  <PARAM id="lowCompRatio" value="4.0"/>
+  <PARAM id="lowCompRelease" value="6.000000476837158"/>
+  <PARAM id="lowCompThreshold" value="-24.0"/>
+  <PARAM id="lowLevel" value="-5.364418029785156e-7"/>
+  <PARAM id="midDrive" value="55.0"/>
+  <PARAM id="midLevel" value="-5.364418029785156e-7"/>
+  <PARAM id="outputClip" value="0.0"/>
+  <PARAM id="outputGain" value="-5.364418029785156e-7"/>
+  <PARAM id="splitHighHz" value="600.0000610351562"/>
+  <PARAM id="splitLowHz" value="119.9999847412109"/>
+</PARAMETERS>

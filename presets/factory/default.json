@@ -1,10 +1,13 @@
 {
     "format": "basilica-preset-1",
     "plugin": "com.yvesvogl.crypta",
-    "pluginVersion": "0.2.0",
+    "pluginVersion": "0.3.0",
     "name": "Default",
     "category": "Init",
     "parameters": {
+        "driveEngine": 1.0,
+        "lowCompDetector": 1.0,
+        "gateMode": 1.0,
         "splitLowHz": 120.0,
         "splitHighHz": 600.0,
         "lowCompRatio": 2.0,

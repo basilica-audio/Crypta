@@ -1,5 +1,7 @@
 #pragma once
 
+#include "LevelDetector.h"
+
 #include <juce_dsp/juce_dsp.h>
 
 // Low-band parallel ("New York style") compressor (issue #42): the low band
@@ -36,12 +38,56 @@ namespace cryp
         // SmoothedValue, and DryWetMixer::setWetMixProportion only updates a
         // scalar + recomputes the (already-allocated) dry/wet volume
         // targets.
-        void setThresholdDb (float newThresholdDb) noexcept { compressor.setThreshold (newThresholdDb); }
-        void setRatio (float newRatio) noexcept { compressor.setRatio (newRatio); }
-        void setAttackMs (float newAttackMs) noexcept { compressor.setAttack (newAttackMs); }
-        void setReleaseMs (float newReleaseMs) noexcept { compressor.setRelease (newReleaseMs); }
+        void setThresholdDb (float newThresholdDb) noexcept
+        {
+            compressor.setThreshold (newThresholdDb);
+            detector.setThresholdDb (newThresholdDb);
+        }
+
+        void setRatio (float newRatio) noexcept
+        {
+            compressor.setRatio (newRatio);
+            detector.setRatio (newRatio);
+        }
+
+        void setAttackMs (float newAttackMs) noexcept
+        {
+            compressor.setAttack (newAttackMs);
+            detector.setAttackMs (newAttackMs);
+        }
+
+        void setReleaseMs (float newReleaseMs) noexcept
+        {
+            compressor.setRelease (newReleaseMs);
+            detector.setReleaseMs (newReleaseMs);
+        }
+
         void setMakeupGainDb (float newMakeupDb) noexcept { makeupGain.setGainDecibels (newMakeupDb); }
         void setWetMixProportion (float newWetMixProportion01) noexcept { mixer.setWetMixProportion (newWetMixProportion01); }
+
+        //======================================================================
+        // v0.3.0 detector engine selection. `Classic Peak` is the stock
+        // juce::dsp::Compressor path v0.2.0 shipped, preserved bit-identical;
+        // `Smooth RMS` is cryp::LevelDetector (see its header for why a bass
+        // low band needs it).
+        void setUseSmoothRmsDetector (bool shouldUseSmoothRms) noexcept { useSmoothRms = shouldUseSmoothRms; }
+        void setKneeDb (float newKneeDb) noexcept { detector.setKneeDb (newKneeDb); }
+        void setAutoRelease (bool shouldAutoRelease) noexcept { detector.setAutoRelease (shouldAutoRelease); }
+        void setAutoMakeup (bool shouldAutoMakeup) noexcept { autoMakeup = shouldAutoMakeup; }
+
+        // Auto-makeup is read by BOTH engines, so it is applied here rather
+        // than inside the detector: the total makeup is the manual value plus,
+        // when enabled, the half-compensation figure.
+        float getEffectiveMakeupDb (float manualMakeupDb) const noexcept
+        {
+            return manualMakeupDb + (autoMakeup ? detector.getAutoMakeupDb() : 0.0f);
+        }
+
+        // Peak gain reduction from the last processed block, positive dB.
+        // Only meaningful on the Smooth RMS path: juce::dsp::Compressor does
+        // not expose its internal gain, and reverse-engineering it from the
+        // audio would be guesswork.
+        float getGainReductionDb() const noexcept { return useSmoothRms ? detector.getGainReductionDb() : 0.0f; }
 
         // In-place parallel compression: mixer.pushDrySamples() captures the
         // pre-compression signal, the compressor + makeup gain run in place,
@@ -52,7 +98,12 @@ namespace cryp
             mixer.pushDrySamples (juce::dsp::AudioBlock<const float> (block));
 
             juce::dsp::ProcessContextReplacing<float> context (block);
-            compressor.process (context);
+
+            if (useSmoothRms)
+                detector.process (block);
+            else
+                compressor.process (context);
+
             makeupGain.process (context);
 
             mixer.mixWetSamples (block);
@@ -60,6 +111,10 @@ namespace cryp
 
     private:
         juce::dsp::Compressor<float> compressor;
+        LevelDetector detector;
+        bool useSmoothRms = false;
+        bool autoMakeup = false;
+
         juce::dsp::Gain<float> makeupGain;
         juce::dsp::DryWetMixer<float> mixer;
     };
