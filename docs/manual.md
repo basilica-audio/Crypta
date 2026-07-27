@@ -60,6 +60,18 @@ Crypta ships with a preset system: a horizontal bar at the top of the plugin win
 
 A fresh instance loads a user "Default" preset if you've saved one ("Set current as default" in the preset menu), otherwise the factory "Default" preset (matching the plain parameter defaults documented below).
 
+## Engines (NEW in v0.3.0)
+
+Three parameters select between the v0.2.0 DSP and its v0.3.0 replacement. A **new** instance boots into the new engines; **any session or preset you saved before v0.3.0 keeps the old ones**, so nothing you have already made changes how it sounds. Switch freely — the change is crossfaded, not stepped.
+
+| Parameter | Options | Default (fresh instance) | What changes |
+|---|---|---|---|
+| Drive Engine | Classic / Circuit | Circuit | *Classic* is the v0.2.0 Mid and High band exactly. *Circuit* rebuilds both from circuit models, with far less aliasing (25–30 dB better) and per-voicing pre/post-emphasis networks. |
+| Low Comp Detector | Classic Peak / Smooth RMS | Smooth RMS | *Classic Peak* is the v0.2.0 detector. *Smooth RMS* measures over a window longer than one bass cycle, so the low band stops tremoloing on sustained low notes. |
+| Gate Mode | Classic / Modern | Modern | *Classic* is the v0.2.0 gate. *Modern* adds hysteresis, hold, a detector-only sidechain highpass and a straight-line release. |
+
+**If you preferred the old sound**, set the relevant engine to Classic — it is preserved exactly, not approximated.
+
 ## Parameter reference
 
 Unless noted otherwise, all continuous parameters are smoothed to avoid zipper noise when automated.
@@ -71,11 +83,14 @@ Unless noted otherwise, all continuous parameters are smoothed to avoid zipper n
 | Input Gain | −24 … +24 | 0 | dB | Trims the signal before anything else in the chain. Use this to get a hot but not clipping signal into the gate/compressor/drive/voicing stages - all of their thresholds are calibrated assuming a reasonably "line level" input. |
 | Output Gain | −24 … +24 | 0 | dB | Final output trim, applied after everything else (including the safety clip). |
 | Bypass | off/on | off | — | Forces a bit-exact passthrough of the input signal. Also exposed as the plugin's host-facing bypass parameter, so your DAW's own bypass button/automation lane works too. |
-| Safety Clip | off/on | off | — | A soft (tanh) limiter on the very last stage before the output trim. Off by default; turn it on as a safety net against accidental hard-clipped overs, not as a tone-shaping tool - at typical playing levels it's inaudible, and it only starts rounding peaks once they approach 0 dBFS. |
+| Safety Clip | off/on | off | — | A soft ceiling clip on the very last stage before the output trim. Off by default; turn it on as a safety net against accidental hard-clipped overs, not as a tone-shaping tool. As of v0.3.0 it is antialiased and is genuinely transparent below the ceiling — arming it no longer colours anything until something actually reaches the ceiling. |
+| Clip Ceiling | −12 … 0 | 0 | dBFS | Where the safety clip starts working. Only read while Safety Clip is on. 0 dBFS reproduces the v0.2.0 behaviour. |
 
 ### Noise Gate (full-band, before the crossover splits)
 
 Sits ahead of both crossovers, so it gates the input signal as a whole rather than per band.
+
+**Gate Ratio is Classic-only.** Modern is a gate with a range floor rather than a ratio expander, and ignores it.
 
 | Parameter | Range | Default | Unit | What it does |
 |---|---|---|---|---|
@@ -84,6 +99,10 @@ Sits ahead of both crossovers, so it gates the input signal as a whole rather th
 | Gate Ratio | 1 … 20 | 10 | :1 | How aggressively the gate attenuates once below threshold. Higher = closer to a hard mute. |
 | Gate Attack | 0.1 … 50 | 1 | ms | How fast the gate opens once the signal crosses back above threshold. |
 | Gate Release | 5 … 500 | 100 | ms | How fast the gate closes once the signal drops below threshold. |
+| Gate Hysteresis | 0 … 12 | 4 | dB | *Modern only.* How far below the threshold the signal must fall before the gate starts closing. This is what stops a note decaying through the threshold from making the gate stutter. |
+| Gate Hold | 0 … 500 | 20 | ms | *Modern only.* Keeps the gate open for this long after the signal drops, and restarts on each new transient — so it does not slam shut between fast notes. |
+| Gate SC Highpass | 20 … 400 | 80 | Hz | *Modern only.* Highpasses the gate's **detector** only; the audio is untouched. Raise it if a ringing low string is holding the gate open. |
+| Gate Range | 6 … 90 | 60 | dB | *Modern only.* How far a fully closed gate attenuates, and the height the release ramp falls through. A gate that only ducks 12 dB often sounds more natural than one that shuts completely. |
 
 ### Split Low / Split High (two cascaded crossovers, NEW topology in v0.2.0)
 
@@ -107,6 +126,9 @@ The low band is compressed **in parallel**: the compressed signal is blended bac
 | Low Comp Makeup | −12 … +24 | 0 | dB | Gain applied to the compressed (wet) signal before it's blended back with the dry low band - use this to bring the compressed signal back up to match the dry level, so Mix behaves as a true "how much compression character" control rather than also changing overall loudness. |
 | Low Comp Mix | 0 … 100 | 100 | % | Blend between the dry (uncompressed) and wet (compressed + makeup) low band. 0% = compressor has no audible effect; 100% = fully compressed. |
 | Low Level | −24 … +12 | 0 | dB | Level trim on the low band, applied after compression and before the bands are summed back together. |
+| Low Comp Knee | 0 … 18 | 6 | dB | *Smooth RMS only.* Width of the soft knee around the threshold. 0 dB is a hard knee; wider settings start compressing gradually as the signal approaches the threshold, which is much less obvious on sustained bass. |
+| Low Comp Auto Release | off/on | on | — | *Smooth RMS only.* Stretches the release on sustained material while leaving it at the set value for transients, so a held low note is not pumped. |
+| Low Comp Auto Makeup | off/on | off | — | Read by **both** detectors. Adds a fixed boost that compensates roughly half the gain the compressor takes away at the threshold, so changing the threshold does not also change your level. Summed with the manual Makeup control. |
 
 ### Mid band: drive + level (NEW in v0.2.0)
 
@@ -129,6 +151,7 @@ Three selectable distortion voicings, each 4x oversampled to keep the nonlinear 
 | High Tone | 0 … 100 | 50 | % | Post-shaper tone control: a low-pass sweeping from dark (0%) to bright (100%), tucking away or opening up fizz/harshness from the distortion stage. |
 | High Blend | 0 … 100 | 100 | % | Blend between the clean (pre-voicing) and fully distorted high band. 0% = clean high band (voicing has no audible effect); 100% = fully distorted. |
 | High Level | −24 … +12 | 0 | dB | Level trim on the high band, applied after voicing/blend and before the bands are summed back together. |
+| High Bias | 0 … 100 | 0 | % | *Circuit only.* Offsets the clipper so it saturates asymmetrically, which adds even-order harmonics — a warmer, more "tube-like" character than the symmetric default. 0 % is exactly the v0.2.0 character. The offset is removed again downstream, so this never puts DC on your output. |
 
 **Voicings:**
 
@@ -167,7 +190,17 @@ A convolution-based cab-sim stage that now processes **only the Mid+High post-su
 
 *Loading impulse responses:* v0.2.0 still does not ship an in-plugin file browser or factory cabinet IRs (both remain on the roadmap for a later milestone alongside the custom GUI). The IR-loading DSP engine itself is fully implemented and real-time safe.
 
-## State migration (v0.1.x → v0.2.0)
+## State migration
+
+### v0.2.x → v0.3.0
+
+Opening a session or loading a preset saved before v0.3.0 sets **Drive Engine**, **Low Comp Detector** and **Gate Mode** to their Classic values, so your saved work sounds exactly as it did. This applies to host sessions and to your own saved presets alike, including a user preset named "Default" — so if you had saved your own default, that is still what you get on a new instance.
+
+The one deliberate exception is the **safety clip**: if you had it switched on, v0.3.0's clipper is not bit-identical to v0.2.0's. It aliases far less and is transparent below the ceiling; the difference is confined to material that was actually being clipped.
+
+New parameters (High Bias, the knee and auto controls, the Modern gate's controls, Clip Ceiling) are either neutral by default or are only read when their engine is selected, which legacy state never selects.
+
+### v0.1.x → v0.2.0
 
 If you open a Crypta v0.1.x session, the old single `Crossover Frequency` value is migrated to the new **Split High** parameter, clamped into its new 300–2000 Hz range (v0.1.x's own shipped default, 250 Hz, is below that floor, so an untouched v0.1.x session lands exactly at 300 Hz on reopen). Split Low and every new Mid-band/Tight parameter fall back to their v0.2.0 defaults. Any low-band compressor settings you had explicitly changed away from v0.1.x's old defaults are preserved as-is — only the *shipped default* changed, not your own deliberate settings. This is a best-effort, lossy, one-directional migration; re-check your low/mid/high balance after reopening an old session.
 

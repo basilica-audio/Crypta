@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-27
+
+### Added (headline: the Circuit drive engine)
+
+- **A second drive engine, `Drive Engine = Circuit`**, replacing the Mid and High bands' stock waveshapers with circuit-derived, antialiased stages (`src/dsp/CircuitDrive.{h,cpp}`). The two bands now share ONE oversampling region instead of two independent ones — the remainder is upsampled once, split by a Linkwitz-Riley crossover running at the oversampled rate, processed, summed and downsampled once. The saved cost pays for the extra per-voicing filtering at roughly the CPU v0.2.0 spent. The oversampling factor adapts to the host rate (4x below 50 kHz, 2x below 100 kHz, 1x above).
+- **First-order antiderivative antialiasing** (`src/dsp/ADAAShaper.h`), after Parker, Zavalishin & Le Bivic (DAFx-16). Closed forms for tanh and hard clip; a cubic-interpolated table with a numerically integrated antiderivative for curves whose antiderivative is not elementary. Measured alias-to-signal improvement over the Classic engine: **25–30 dB** across a 1.2–10 kHz sweep at full drive, and **−80 dB or better through the bass register**.
+- **Per-voicing circuit topologies.** *Gnaw* gains a pre-emphasis shelf and its exact algebraic inverse behind the clipper, so drive 0 collapses to unity structurally rather than approximately. *Wool* is now the asymmetric diode clipper's own DC curve, Newton-solved per table point at prepare time, plus a dynamic bias side chain that leaves the clipper offset for ~20 ms after a loud passage — history-dependent behaviour a memoryless waveshaper cannot produce. *Razor* gains the feedback clipper's unity-clean-plus-clipped-difference structure, with the guitar pedal's 720 Hz pre-emphasis corner moved to 330 Hz for the bass register. Gnaw and Razor share the drive-tracked post-clip pole.
+- **`High Bias` (0–100 %)**, a continuous even-harmonic control: a DC offset into the High clipper, removed again by a 10 Hz blocker so it never reaches the output. 0 % is exactly the symmetric v0.2.0 character.
+- **A log-domain RMS low-band detector, `Low Comp Detector = Smooth RMS`** (`src/dsp/LevelDetector.h`), with a soft knee, program-dependent release and auto-makeup. This fixes the low band's most audible v0.2.0 weakness: a peak detector with the sourced 6 ms release follows the half-cycles of a bass fundamental, so the gain reduction ripples and the low end tremolos. Measured ripple on an 80 Hz tone 6 dB over threshold: **over 1 dB → under 0.5 dB**. New controls: `Low Comp Knee` (0–18 dB), `Low Comp Auto Release`, `Low Comp Auto Makeup`.
+- **A `Gate Mode = Modern` gate** (`src/dsp/GateEngine.{h,cpp}`) with hysteresis, retriggering hold, a detector-only sidechain highpass and a dB-linear release, running its control path per sample. New controls: `Gate Hysteresis` (0–12 dB), `Gate Hold` (0–500 ms), `Gate SC Highpass` (20–400 Hz), `Gate Range` (6–90 dB).
+- **`Clip Ceiling` (−12–0 dBFS)** for the safety clip.
+- **Metering backend** (`src/dsp/MeterTaps.h`, closes #13): lock-free input/output peak, per-band level, and low-comp and gate gain reduction, with a plain labelled readout row in the editor. The photoreal M3 GUI consumes the same struct later.
+- Three factory presets showcasing the new engine: **Circuit Foundation**, **Circuit Grind**, **Circuit Knife**.
+
+### Changed
+
+- **Fresh instances boot into Circuit / Smooth RMS / Modern.** Existing work does not: every pre-v0.3.0 session and every pre-v0.3.0 preset has the legacy engines injected on load, through two independent migrations (see below). The eight factory presets voiced against the v0.2.0 DSP pin the Classic engines explicitly, so none of them changes character.
+- **State schema v2.** Saved state now carries a `stateVersion` attribute; state without one has `driveEngine`, `lowCompDetector` and `gateMode` set to their legacy values on load.
+- **Presets are migrated separately.** Presets never pass through `setStateInformation()`, and `applyParsedPreset()` resets to defaults before applying a preset's values — so a legacy preset would otherwise adopt the new engines. `PresetManager` gains a generic, version-gated legacy back-fill for this, empty by default so the rest of the suite is unaffected. The preset JSON schema is unchanged: this is a read-side default-fill, not a format change.
+- The Circuit engine ramps its automatable scalars per sample rather than holding them constant across a block.
+- Reported latency is now the maximum across both engines, with the Circuit path padded up to it, so switching drive engines never re-reports latency to the host. Reported latency depends on the sample rate alone.
+
+### Fixed
+
+- **The safety clip no longer aliases freely.** It was a raw per-sample `std::tanh` on the full mix; it is now an ADAA ceiling clip in delta form (`src/dsp/OutputClipper.h`), which is transparent below the ceiling instead of lowpassing everything whenever it is armed. Measured deviation across 40 Hz – 20 kHz: **0.13 dB**. With the clip engaged this is a deliberate, documented departure from v0.2.0's output.
+
+### Known deviations from the v0.3.0 brief
+
+Each is recorded in full at the relevant assertion in the test suite:
+
+- The brief's flat **−80 dB alias floor** is not reachable for Gnaw, a 40x hard clip whose harmonics fall off as 1/n. Raising the engine to 8x oversampling was measured and still misses it. Delivered instead: 25–30 dB better than Classic against a 10 dB requirement, −80 dB or better through the bass register, and a −49 dB floor everywhere.
+- The drive-tracked pole opens to **61 kHz** at drive 0, not the brief's 24 kHz — a one-pole at 24 kHz is already −1.9 dB at 18 kHz and could not meet the brief's own transparency requirement. 61 kHz is also the figure the research gives for the real circuit.
+- **Engine parity** at drive 0 holds to ±0.5 dB up to 3 kHz. Above that the Circuit engine is up to 2.5 dB brighter, because its tone lowpass runs at the oversampled rate and so escapes the bilinear warping the base-rate Classic filter has.
+- **Wool's sag has the opposite sign** to the brief's prediction: the probe blooms rather than dips, because the DC the bias creates dominates the slope change. History-dependence is confirmed and is 11 dB on Wool against 1 dB on the memoryless voicings. Flagged for the ear-tuning gate.
+- The Circuit voicing constants remain **engineering-derived starting points**; the listening gates (#15/#16/#17, #34) still apply.
+
 ## [0.2.0] - 2026-07-16
 
 ### Changed (headline: 2-band → 3-band topology rebuild)

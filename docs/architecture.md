@@ -42,7 +42,7 @@ All three bands re-converge at the `Sum` stage. The Low band carries a compensat
 
 | Directory | Responsibility |
 |---|---|
-| `src/dsp` | All audio-thread DSP, each in its own class with a matching Catch2 test file: `Crossover` (LR4 split/sum, two cascaded instances - `lowSplit`, `midHighSplit`), `PhaseAlignFilter` (Low-band phase-alignment allpass - see below), `NoiseGateStage` (full-band input gate), `ParallelCompressor` (low-band dynamics), `MidBand` (mid-band staged drive, NEW in v0.2.0), `Voicing` (high-band Gnaw/Wool/Razor distortion + Tight pre-drive HPF + 4x oversampling + tone + blend), `BandEQ` (post-sum 4-band EQ), `IRLoader` (cab-sim convolution, relocated in v0.2.0 to the Mid+High branch), `SplitGap` (pure `clampSplitHighHz()` helper enforcing the minimum musical gap between the two crossover splits). `RealtimeCoefficients.h` is a shared helper for updating `juce::dsp::IIR` filter coefficients from the audio thread without heap allocation (see below). No allocation, locks, or I/O once `prepareToPlay` has run. |
+| `src/dsp` | All audio-thread DSP, each in its own class with a matching Catch2 test file: `Crossover` (LR4 split/sum, two cascaded instances - `lowSplit`, `midHighSplit`), `PhaseAlignFilter` (Low-band phase-alignment allpass - see below), `NoiseGateStage` (full-band input gate), `ParallelCompressor` (low-band dynamics), `MidBand` (mid-band staged drive, NEW in v0.2.0), `Voicing` (high-band Gnaw/Wool/Razor distortion + Tight pre-drive HPF + 4x oversampling + tone + blend), `BandEQ` (post-sum 4-band EQ), `IRLoader` (cab-sim convolution, relocated in v0.2.0 to the Mid+High branch), `SplitGap` (pure `clampSplitHighHz()` helper enforcing the minimum musical gap between the two crossover splits). **v0.3.0 adds** `ADAAShaper` (antiderivative antialiasing core, closed-form and tabulated), `CircuitDrive` (the Circuit engine: one shared oversampling region, OS-rate split, per-voicing circuit topologies), `LevelDetector` (log-domain RMS compressor detector with soft knee and program-dependent release), `GateEngine` (the Modern gate), `OutputClipper` (ADAA ceiling clip in delta form) and `MeterTaps` (lock-free metering). `RealtimeCoefficients.h` is a shared helper for updating `juce::dsp::IIR` filter coefficients from the audio thread without heap allocation (see below). No allocation, locks, or I/O once `prepareToPlay` has run. |
 | `src/params` | Parameter layout and `AudioProcessorValueTreeState` definitions — parameter IDs, ranges, defaults, and value-to-DSP mapping. Single source of truth for what a preset captures. |
 | `src/presets` | M2 preset system (`PresetManager`, `PresetBar`, `Localisation`) - see [Preset system](#preset-system-m2) below. |
 | `src/ui` | Editor/GUI code. Talks to the processor only through `src/params` (attachments) and read-only metering data — never reaches into `src/dsp` internals directly. Placeholder generic JUCE UI (plus the M2 preset bar) until the custom vector GUI lands in a later milestone (M3). |
@@ -89,6 +89,52 @@ The Mid band's staged drive (`cryp::MidBand`) and the High band's voicing (`cryp
 
 `juce::dsp::DryWetMixer::prepare()` calls `reset()` internally, which snaps its smoothed dry/wet volumes to whatever `mix` was set to *at that moment* - so if `prepare()` runs before the real mix value is set, the mixer briefly snaps to a stale default before the next `setWetMixProportion()` call retargets it, causing an audible fade-in glitch on the very first block. `ParallelCompressor::prepare()`, `Voicing::prepare()`, and `IRLoader::prepare()` all take the current mix proportion as an explicit parameter and call `setWetMixProportion()` *before* `prepare()` internally, closing this gap at the API level rather than relying on call-order discipline at every call site. `MidBand` has no `DryWetMixer` (no blend control), so this gotcha does not apply to it.
 
+## Drive engines (v0.3.0)
+
+`driveEngine` selects between two implementations of the Mid+High section.
+
+**Classic** is the v0.2.0 code, unchanged: `cryp::MidBand` and `cryp::Voicing`, each owning its own 4x oversampling instance. It is preserved byte-for-byte because it is what every pre-v0.3.0 session and preset is migrated onto — `tests/GoldenRenderTests.cpp` renders committed v0.2.0 fixtures through the migrated processor and asserts sample-exact equality on macOS.
+
+**Circuit** (`src/dsp/CircuitDrive.{h,cpp}`) collapses the two oversampling regions into one:
+
+```
+remainder (base rate)
+  -> upsample once
+  -> LR4 split #2, at fs*M          (cryp::Crossover, unchanged, prepared at fs*M)
+  -> Mid:  ADAA tanh, dry-crossfaded by drive
+     High: tight HPF -> per-voicing pre-emphasis -> ADAA clipper -> de-emphasis
+           -> drive-tracked LPF -> DC blocker -> character -> tone -> blend
+  -> per-band level -> sum -> downsample once
+```
+
+The saved oversampling region is what pays for the extra per-voicing filtering. The factor adapts to the host rate (4x ≤ 50 kHz, 2x ≤ 100 kHz, 1x above), on the basis that ADAA-1 contributes 20–30 dB of alias suppression on top of the oversampling headroom.
+
+Both engines stay prepared at all times, so switching is a branch rather than a reallocation. A switch arms a 256-sample constant-gain crossfade during which **both** engines run, and **flushes the incoming engine** first: only one engine runs at a time, so the idle one's oversampling history and delay lines otherwise hold stale audio and release it as a burst. The crossfade is longer than the brief's 64 samples because the flushed engine needs its own latency to refill before it can be given significant gain.
+
+### Antialiasing
+
+`src/dsp/ADAAShaper.h` implements first-order antiderivative antialiasing (Parker, Zavalishin & Le Bivic, DAFx-16): `y[n] = (F1(x[n]) − F1(x[n−1])) / (x[n] − x[n−1])`, with a midpoint fallback when consecutive inputs converge and the quotient becomes ill-conditioned. Closed forms are used where the antiderivative is elementary (tanh → ln cosh, hard clip → piecewise); otherwise a 2048-point cubic-interpolated table is built at prepare time, with `F1` obtained by Simpson integration of the sampled curve so the pair stays mutually consistent.
+
+Two costs are inherent and accepted: a half-sample group delay (identical across Mid and High, so the bands stay aligned, and absorbed inside the oversampled region), and a mild `cos(pi*f/fs)` droop — which is why this is used *on top of* oversampling rather than instead of it.
+
+## Latency across the two engines
+
+The engines can have different intrinsic latencies, because Circuit's oversampling factor varies with the host rate while Classic is always 4x. Rather than re-report latency when `driveEngine` changes — which hosts handle poorly mid-transport, and which would make an automated engine switch shift the plugin's timing — `computeTotalLatencySamples()` returns the maximum across **both** engines and `circuitAlignDelay` pads the Circuit path up to it. Reported latency is therefore a function of the sample rate alone.
+
+Note that the reported figure is the oversampling delay, not a full group-delay description: the Circuit high band contains IIR filters Classic does not (the 10 Hz DC blocker, the drive-tracked pole), so its reconstructed impulse peaks up to ~25 samples later. No single number can describe a frequency-dependent group delay; what is asserted instead is that reported latency matches across engines and rates, and that the three-way sum stays flat.
+
+## The safety clip's delta form
+
+`src/dsp/OutputClipper.h` applies ADAA to the clipper's **residual**, `r(x) = x − c·tanh(x/c)`, and returns `x − ADAA1_r(x)`.
+
+The reason is that naive ADAA-1 of a function that is nearly linear over the segment degenerates to the two-tap average `(x[n] + x[n−1])/2` — a lowpass about −8.3 dB down at 18 kHz at 48 kHz, plus half a sample of delay, applied to the entire mix whenever the clip is merely armed. The delta form is algebraically `ADAA1(clip(x)) + (x[n] − x[n−1])/2`, i.e. the antialiased clipper plus an exact compensator for that droop and delay, so sub-ceiling material passes through transparently by construction.
+
+That compensator is a first difference, and on fast material it can push a sample back over the ceiling (measured at 1.15 against a ceiling of 1.0). A final hard bound at the ceiling is therefore applied: it never engages below the ceiling, so transparency is untouched, and above it the ADAA has already done the antialiasing. At extreme overdrive the bound does cost the antialiasing advantage — the right priority ordering for a *safety* clip, with heavy clipping belonging to the drive stages.
+
+## Metering
+
+`src/dsp/MeterTaps.h` is a plain struct of `std::atomic<float>` — no FIFO, no queue, no allocation. The audio thread stores at block rate; the UI loads at 30 Hz. A meter is a most-recent-value display, so block-rate decimation is both sufficient and free, and a `static_assert` on `is_always_lock_free` keeps the audio thread from ever blocking on a reader. Both drive engines report their own per-band levels, since the Circuit engine's bands are summed inside its oversampled region and cannot be measured from outside.
+
 ## Preset system (M2)
 
 v0.2.0 adds the suite-wide M2 preset system (`.scaffold/specs/preset-system-m2.md`), copied from `basilica-audio/nave`'s pilot implementation (`docs/preset-system-notes.md` in that repo is the replication recipe) - `src/presets/PresetManager.{h,cpp}` and `src/presets/PresetBar.{h,cpp}` are portable, Crypta-agnostic classes; the only Crypta-specific glue is `PluginProcessor.cpp`'s `makePresetManagerConfig()`/`makeFactoryPresetAssets()` helpers and the nine `presets/factory/*.json` files (embedded via `juce_add_binary_data` as `CryptaBinaryData`, see `CMakeLists.txt`). `AudioProcessorValueTreeState` is the single source of truth for parameter values; `PresetManager` reads/writes it only through its public API and owns no parallel copy of state.
@@ -96,6 +142,17 @@ v0.2.0 adds the suite-wide M2 preset system (`.scaffold/specs/preset-system-m2.m
 `PresetManager`'s only audio-thread-adjacent code is its `AudioProcessorValueTreeState::Listener::parameterChanged()` override (dirty-flag tracking), implemented as a single lock-free `std::atomic<bool>` store. Every other method (file I/O, JSON parsing, `juce::String`/`juce::var` allocation) is message-thread-only, called from the processor's constructor or from `PresetBar`'s UI callbacks - never from `processBlock()`.
 
 The editor (`PluginEditor.cpp`) installs a German localisation frame (`resources/i18n/de.txt`, selected via `SystemStats::getUserLanguage()`) before constructing `PresetBar`, using the same `initLocalisationThenGetPresetManager()` helper-function pattern nave established (member initialisers run in declaration order regardless of the order they're written in the initialiser list, so the helper must be invoked from `presetBar`'s own initialiser expression, not the constructor body).
+
+## State migration (schema v2, v0.3.0)
+
+v0.3.0 adds three engine selectors whose APVTS defaults name the NEW engines, so a genuinely fresh instance boots into them. Saved work must not inherit that, and there are **two independent entry points** that both need covering:
+
+1. **Sessions.** `getStateInformation()` stamps a `stateVersion` attribute on the APVTS root element; `setStateInformation()` injects the legacy value for any of the three IDs a state without that attribute fails to mention. It runs after the v0.1 crossover migration, so a v0.1 session gets both in schema order.
+2. **Presets.** Presets never pass through `setStateInformation()` at all. And because `applyParsedPreset()` calls `resetAllParametersToDefault()` before applying a preset's values, a legacy preset — which cannot name the new IDs — would otherwise adopt their new defaults. `PresetManagerConfig` gains a generic, version-gated legacy back-fill (`legacyParameterCutoffVersion` + `legacyParameterDefaults`), empty by default so the rest of the suite is unaffected. This is a read-side default-fill: the preset JSON schema, format tag and `parseAndValidate()` contract are all unchanged.
+
+Both paths refuse to override a value that is explicitly present, and the preset path is gated on version rather than key presence — so a v0.3.0 preset that names one engine and omits the others keeps the new defaults for those, rather than being dragged back to legacy values.
+
+`presets/factory/default.json` is the mechanism by which a fresh instance actually reaches the new engines (the constructor calls `applyStartupDefault()`, which loads it), so it pins all three explicitly and declares `pluginVersion` 0.3.0. The eight presets voiced against the v0.2.0 DSP pin Classic.
 
 ## State migration (v0.1.x → v0.2.0)
 
