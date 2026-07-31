@@ -2,6 +2,8 @@
 
 #include <juce_dsp/juce_dsp.h>
 
+#include <mutex>
+
 // Cab-sim IR loader (issue #42), the final stage before output. Wraps
 // juce::dsp::Convolution (JUCE 8.0.14, juce_dsp/frequency/juce_Convolution.h)
 // configured for zero added latency (the default `Convolution()` /
@@ -35,6 +37,27 @@
 // (e.g. in response to a GUI file-picker or preset load) - it takes
 // ownership of (moves) the supplied buffer, so the caller must not also
 // touch it on the audio thread afterwards.
+//
+// Cross-thread hardening (ported from basilica-audio/Nave PR #28, which hit
+// this exact bug class in CabConvolutionEngine - see
+// tests/CrossThreadReprepareTests.cpp for the full write-up). prepare() and
+// loadImpulseResponse() both ultimately call
+// juce::dsp::Convolution::loadImpulseResponse(), whose background hand-off
+// (juce::dsp::BackgroundMessageQueue::push(), JUCE 8.0.14
+// juce_Convolution.cpp) is documented "only safe to call from a single
+// thread at a time." CryptaAudioProcessor has two call sites for these two
+// methods that are not guaranteed to run on the same thread:
+// prepareToPlay() (called by the host on a thread the VST3/AU contract only
+// guarantees is *not* the audio thread - not that it is JUCE's message
+// thread) and the public CryptaAudioProcessor::loadImpulseResponse(), a
+// seam intended for a future GUI file picker / preset system but already
+// reachable today as public API. `messageThreadMutex` below serialises the
+// two, structurally removing the race rather than narrowing its window. It
+// is a std::recursive_mutex only because loadImpulseResponse() is safe to
+// call reentrantly from within prepare() were that ever needed - taken by
+// prepare() and loadImpulseResponse() only; NEVER by process()/reset()/
+// setWetMixProportion(), which stay lock- and allocation-free for the
+// audio thread.
 namespace cryp
 {
     class IRLoader
@@ -45,6 +68,8 @@ namespace cryp
         // `initialWetMixProportion01` must be the current irMix value
         // (0..1) *before* prepare() runs the internal DryWetMixer's
         // reset(): see the same gotcha documented on cryp::Voicing::prepare().
+        // Message-thread-only (see the class-level threading comment above) -
+        // serialised against loadImpulseResponse() via messageThreadMutex.
         void prepare (const juce::dsp::ProcessSpec& spec, float initialWetMixProportion01);
         void reset();
 
@@ -55,6 +80,8 @@ namespace cryp
         // call from the message thread only. `irSampleRate` is the sample
         // rate the buffer's samples were captured/generated at; Convolution
         // resamples internally to match the session's sample rate.
+        // Serialised against prepare() via messageThreadMutex - see the
+        // class-level threading comment above.
         void loadImpulseResponse (juce::AudioBuffer<float> irBuffer, double irSampleRate);
 
         // Issue #58: the currently-loaded IR's own duration in seconds
@@ -90,5 +117,14 @@ namespace cryp
         // (the identity IR installed by prepare() has a negligible/zero
         // tail by design).
         double loadedIrTailSeconds = 0.0;
+
+        // Serialises prepare() against loadImpulseResponse() - see the
+        // class-level threading comment above. Recursive rather than plain,
+        // matching Nave's CabConvolutionEngine pattern, so a future
+        // message-thread-only method calling another one of this class's
+        // message-thread-only methods (there is none today, but Nave's
+        // equivalent grew that shape over time) does not self-deadlock.
+        // Never locked by process()/reset()/setWetMixProportion().
+        mutable std::recursive_mutex messageThreadMutex;
     };
 }

@@ -20,6 +20,15 @@ namespace cryp
 {
     void IRLoader::prepare (const juce::dsp::ProcessSpec& spec, float initialWetMixProportion01)
     {
+        // Serialised against loadImpulseResponse() - see the class-level
+        // threading comment in IRLoader.h. Both this method and
+        // loadImpulseResponse() are message-thread-only by contract, but
+        // prepareToPlay() (this method's only production caller) runs on
+        // whatever thread the host chooses, which is not guaranteed to be
+        // JUCE's message thread - the same false assumption that caused
+        // basilica-audio/Nave's std::bad_function_call crash (PR #28).
+        const std::lock_guard<std::recursive_mutex> lock (messageThreadMutex);
+
         // Explicitly (re)install a correctly-rate-tagged identity IR *before*
         // convolution.prepare(), per JUCE's own recommendation ("it is
         // recommended to call loadImpulseResponse() before prepare() if a
@@ -65,6 +74,14 @@ namespace cryp
 
     void IRLoader::loadImpulseResponse (juce::AudioBuffer<float> irBuffer, double irSampleRate)
     {
+        // Serialised against prepare() - see the class-level threading
+        // comment in IRLoader.h. This method is reachable today as public
+        // API via CryptaAudioProcessor::loadImpulseResponse() even though
+        // no production UI wires it up yet, so it is a real, live second
+        // entry point into the shared juce::dsp::Convolution instance, not
+        // a hypothetical one.
+        const std::lock_guard<std::recursive_mutex> lock (messageThreadMutex);
+
         // Issue #58: captured before the buffer is moved into Convolution
         // below. A duration in seconds is invariant under Convolution's
         // internal resampling to the session rate, so this is the IR's real

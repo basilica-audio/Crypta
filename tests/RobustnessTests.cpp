@@ -16,6 +16,53 @@
 #include <limits>
 #include <vector>
 
+TEST_CASE ("The allocation guard itself detects an allocation", "[robustness][realtime]")
+{
+    // Every T16 "allocations == 0" assertion elsewhere in this file is
+    // vacuous unless something has actually proven the guard fires when it
+    // should. Ported from basilica-audio/requiem's "6.12 The allocation
+    // guard itself works" (tests/EngineTests.cpp) after an audit found no
+    // such self-test existed here.
+    //
+    // A plain `new float[64]; delete[];` is *not* a valid self-test:
+    // [expr.new] explicitly permits an implementation to omit the
+    // allocation of a new-expression whose storage is never observably
+    // used, and both Clang and MSVC take that permission at Release
+    // optimisation levels - such a self-test would pass in Debug and pass
+    // *vacuously* (0 allocations counted, guard() never actually invoked)
+    // elsewhere, exactly the trap this test exists to close.
+    //
+    // The fix: obtain the storage through a direct call to the replaced
+    // `::operator new` (a plain function call, not a new-expression, so the
+    // elision permission in [expr.new] does not apply at all) and then
+    // write through it via a volatile pointer, which makes the allocated
+    // memory observably used and the call impossible for the optimiser to
+    // remove.
+    {
+        const auto before = AllocationCounter::current();
+
+        auto* deliberate = static_cast<float*> (::operator new (64 * sizeof (float)));
+        *static_cast<volatile float*> (deliberate) = 1.0f;
+        ::operator delete (deliberate);
+
+        CHECK (AllocationCounter::current() > before);
+    }
+
+    // Negative control: ordinary arithmetic with no allocation must leave
+    // the counter untouched, so the guard is not simply free-running.
+    {
+        const auto allocations = AllocationCounter::countDuring ([&]
+        {
+            volatile float sum = 0.0f;
+
+            for (int i = 0; i < 1000; ++i)
+                sum = sum + static_cast<float> (i);
+        });
+
+        CHECK (allocations == 0);
+    }
+}
+
 TEST_CASE ("Denormal-range input produces no NaN/Inf output", "[robustness]")
 {
     CryptaAudioProcessor processor;
