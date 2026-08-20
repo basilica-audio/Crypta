@@ -50,17 +50,21 @@ image has one documented home rather than being linked ad hoc.
 The preview is **generated, never mocked up**: Silentium's GUI test suite
 takes an offscreen snapshot of the real editor, writes it to
 `build/gui-preview.png`, asserts it is non-blank, and that file is what gets
-committed as `docs/gui-preview.png`. Crypta follows the same route once the
-M3 GUI editor exists (#45, #25, #26, #27, #28). The file is deliberately
-absent until then rather than being filled with a stand-in image, because a
-hand-made mockup committed under that name would be indistinguishable from a
-real screenshot the moment anyone links to it.
+committed as `docs/gui-preview.png`. Crypta now follows the same route:
+`tests/gui/GuiPreviewSnapshotTests.cpp` renders the editor through
+`Component::createComponentSnapshot()`, checks the result is not a flat fill,
+and writes the PNG next to the test binary. Nothing under that name is ever
+hand-made — a mockup committed there would be indistinguishable from a real
+screenshot the moment anyone linked to it.
 
 Companion docs Silentium carries alongside the preview, worth mirroring when
 Crypta's editor lands:
 
-- `docs/gui-components.md` — component architecture of the editor
-- `docs/gui-mapping.md` — which APVTS parameter each physical control drives
+- `docs/gui-mapping.md` — which APVTS parameter each physical control drives (**present**)
+- `docs/gui-components.md` — component architecture of the editor. Crypta keeps
+  this in [`architecture.md`](architecture.md#gui-vector-editor) instead of a
+  separate file, so the GUI is described in the same place as the DSP it
+  drives rather than drifting in a second document.
 
 ## Archived logo drafts
 

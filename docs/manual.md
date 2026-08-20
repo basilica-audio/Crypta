@@ -68,6 +68,38 @@ Crypta ships with a preset system: a horizontal bar at the top of the plugin win
 
 A fresh instance loads a user "Default" preset if you've saved one ("Set current as default" in the preset menu), otherwise the factory "Default" preset (matching the plain parameter defaults documented below).
 
+## The interface
+
+The plugin window is laid out **in signal order**, left to right and top to bottom, in ten sections: Input, Noise Gate, Crossover, Low Band, Drive Engine, Mid Band, High Band, Cabinet, EQ, Output. Whatever you see further right or further down happens later in the chain. Every one of the plugin's 51 parameters is on the front panel — nothing is hidden behind a menu.
+
+**Knobs.** Drag up/down or left/right to turn; hold **Shift** while dragging for fine adjustment. Knobs with a fixed set of positions (Gate Mode, Low Comp Detector, Drive Engine, High Voicing) click into their detents and show the option's name. Double-click a value box to type an exact number.
+
+**Keyboard.** Every control is reachable with **Tab**, in signal order — and Tab never gets stuck inside one section. With a knob focused:
+
+| Key | Step |
+|---|---|
+| ← / → / ↑ / ↓ | 1 % of the knob's range (choice knobs: one position) |
+| Shift + arrow | fine — 0.1 % of the range |
+| Page Up / Page Down | 10 % of the range |
+| Home / End | minimum / maximum |
+
+Toggles (the lamp switches) respond to **Space** and **Return**. Ctrl/Cmd-modified arrows are left alone, so your host's own shortcuts keep working. The focused control is always marked with a gold ring.
+
+**Screen readers.** Every control announces its name, its role and its current value *with units* ("Gate Threshold, slider, −60.00 dB"), and each section is announced as a named group. The four meters can be queried on demand and read out their current value ("Input peak level meter, −8.2 dBFS"); they deliberately do not interrupt you on every update.
+
+**Meters.** Four needle meters read the metering added in v0.3.0:
+
+| Meter | Scale | Reads |
+|---|---|---|
+| IN | −60…+6 dBFS | Input block peak, before anything else |
+| GATE | 0…20 dB | How much the noise gate is currently pulling down |
+| COMP | 0…20 dB | How much the low band's parallel compressor is pulling down |
+| OUT | −60…+6 dBFS | Output block peak, after everything |
+
+The peak meters rise fast and fall slowly, so a transient is actually visible, and the scale from 0 dBFS up is engraved in red — the needle turns red there too, but the position alone already tells you. Gain-reduction needles rest at the right and swing left as reduction deepens. All metering runs on the interface thread; it costs the audio engine nothing.
+
+**Resizing.** Drag the grip in the bottom-right corner. The window keeps its aspect ratio and scales between 60 % and 180 % — it is a pure zoom, so nothing re-flows or gets clipped at any size. **The size you choose is saved with the session** and with the plugin instance, so a reopened project comes back the way you left it. A project saved before this version opens at 100 %.
+
 ## Engines (NEW in v0.3.0)
 
 Three parameters select between the v0.2.0 DSP and its v0.3.0 replacement. A **new** instance boots into the new engines; **any session or preset you saved before v0.3.0 keeps the old ones**, so nothing you have already made changes how it sounds. Switch freely — the change is crossfaded, not stepped.
@@ -200,7 +232,7 @@ A convolution-based cab-sim stage that now processes **only the Mid+High post-su
 | IR Enable | off/on | off | — | Enables the IR loader stage. |
 | IR Mix | 0 … 100 | 100 | % | Blend between the dry (pre-convolution) and fully convolved Mid+High signal. |
 
-*Loading impulse responses:* v0.2.0 still does not ship an in-plugin file browser or factory cabinet IRs (both remain on the roadmap for a later milestone alongside the custom GUI). The IR-loading DSP engine itself is fully implemented and real-time safe.
+*Loading impulse responses:* the Cabinet section of the editor exposes the two parameters above and nothing else — there is still **no in-plugin file browser and no bundled factory cabinet IRs**; both remain on the roadmap. The IR-loading DSP engine itself is fully implemented and real-time safe, and a host or wrapper that calls the plugin's IR-loading entry point works today.
 
 ## State migration
 

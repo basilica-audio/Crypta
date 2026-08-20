@@ -33,7 +33,9 @@ Crypta is a Parallax-style bass plugin built on JUCE 8. As of v0.2.0 it splits y
 - **Delay-compensated, phase-aligned signal path** — the Mid+High branch's shared oversampling latency is reported to the host, the low band is time-aligned to match, and a phase-alignment allpass filter keeps the cascaded three-way sum flat-magnitude
 - **Presets** — factory + user presets, save/save-as/delete, import/export (single files and zip banks), German localisation of the preset UI frame
 - **State migration** — a v0.1.x session's single crossover frequency is migrated to the new Split High parameter on load
-- **Metering** throughout the signal chain *(planned, alongside the custom GUI)*
+- **Custom vector GUI** — a fully drawn (no bitmaps) black-and-gold editor: ten sections laid out in signal order carrying all 51 parameters, pointer knobs with engraved scale rings, lamp toggles, and a resizable, aspect-locked window whose zoom level is saved with the session
+- **Metering** — input and output peak plus gate and low-band compressor gain reduction, on four needle meters driven at 30 Hz from the lock-free metering taps
+- **Accessible by design** — full keyboard operability with WAI-ARIA-style stepping, a visible focus ring, screen-reader names/roles/values with units, signal-flow focus order and WCAG AA contrast, all enforced by tests
 
 ## Signal flow
 
@@ -88,18 +90,24 @@ palette, master locations and the archived logo drafts are documented in
 [`docs/branding.md`](docs/branding.md). All artwork is self-made and therefore
 license-clean under this repo's AGPLv3.
 
-**Editor.** Crypta currently ships the M2 preset bar and the v0.3.0 metering
-readout above JUCE's generic parameter editor — deliberately plain, so every
-APVTS parameter has a working control while the DSP is still moving. The
-custom LookAndFeel, band-section layout, metering UI and resizable editor are
-the M3 milestone (#45, #25, #26, #27, #28).
+**Editor.** Crypta ships the suite's vector editor: black-and-gold, drawn
+entirely at runtime (no bitmaps), with EB Garamond embedded as the only
+typographic asset. Ten section panels follow the signal flow and carry all 51
+parameters — 44 pointer knobs with engraved scale rings and 7 lamp toggles —
+alongside four needle meters (input/output peak, gate and low-band-compressor
+gain reduction). The window is resizable and aspect-locked between 60 % and
+180 %, and the zoom level is saved with the session. Which control drives
+which parameter is tabulated in [`docs/gui-mapping.md`](docs/gui-mapping.md);
+the component architecture is in
+[`docs/architecture.md`](docs/architecture.md#gui-vector-editor).
 
-**Screenshot.** There is no GUI screenshot in this README yet, and no
-placeholder image standing in for one. Once the M3 editor lands, the rendered
-preview is committed at `docs/gui-preview.png` and linked here, following the
-suite convention: the image is produced by an offscreen snapshot of the real
-editor taken in the GUI test suite, not drawn by hand. See
-[`docs/branding.md`](docs/branding.md#gui-preview) for the exact route.
+**Screenshot.** ![Crypta editor](docs/gui-preview.png)
+
+The preview above is **generated, not mocked up**: the GUI test suite takes an
+offscreen snapshot of the real editor, asserts it is not blank, and writes it
+to `build/gui-preview.png` (`tests/gui/GuiPreviewSnapshotTests.cpp`); that file
+is what is committed as [`docs/gui-preview.png`](docs/gui-preview.png). See
+[`docs/branding.md`](docs/branding.md#gui-preview) for the convention.
 
 ## Installation
 
@@ -142,7 +150,7 @@ ctest --test-dir build --output-on-failure
 | M0 | Bootstrap — project skeleton, CI, docs | Done |
 | M1 | DSP completion & test coverage — gate, crossover, parallel compressor, 3 voicings (oversampled), 4-band EQ, IR loader, latency compensation, broadened test suite | Done (v0.1.0) |
 | M2 | Deep-dive topology rebuild (2-band → 3-band) + presets & state recall — preset manager, 9 factory presets, state migration, German localisation | Done (v0.2.0) |
-| M3 | GUI & accessibility — custom LookAndFeel, metering UI, accessibility pass | Planned |
+| M3 | GUI & accessibility — custom vector LookAndFeel, full parameter surface, metering UI, resizable editor with stored scale, accessibility pass | Done |
 | M4 | Release: signing, notarization, v1.0.0 — installers, tagged release | Planned |
 
 ## License
@@ -150,6 +158,8 @@ ctest --test-dir build --output-on-failure
 Crypta is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPLv3).
 
 This project uses [JUCE](https://juce.com) 8, whose open-source tier is licensed under AGPLv3 (as of JUCE 8; JUCE 7 and earlier used GPLv3), which is why this project is AGPLv3 rather than GPLv3. See [`docs/adr/0002-agplv3-licensing.md`](docs/adr/0002-agplv3-licensing.md) for the full reasoning.
+
+The editor embeds the [EB Garamond](https://github.com/octaviopardo/EBGaramond12) typeface, licensed under the [SIL Open Font License 1.1](resources/fonts/OFL-EBGaramond.txt) — a copy of that licence ships with the source and inside the plugin's own resources.
 
 VST is a registered trademark of Steinberg Media Technologies GmbH.
 
