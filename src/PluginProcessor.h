@@ -120,6 +120,16 @@ public:
     // Restores the bit-exact passthrough identity IR - the IR slot's "None".
     void clearImpulseResponse();
 
+    // Peak low-band gain reduction from the last processed block, in POSITIVE
+    // decibels (0 = no reduction). Reads the same lock-free tap the meters
+    // publish (cryp::MeterTaps::lowCompGainReductionDb, a relaxed atomic), so
+    // it is safe to call from the UI thread at any time - this is the accessor
+    // a GR needle/meter component should poll on its timer rather than reaching
+    // into the DSP objects. Issue #12 / #13.
+    float getLowBandGainReductionDb() const noexcept
+    {
+        return meterTaps.lowCompGainReductionDb.load (std::memory_order_relaxed);
+    }
 
     // Lock-free metering, written by the audio thread and read by the UI (or
     // by tests). See src/dsp/MeterTaps.h - reading is always safe, from any

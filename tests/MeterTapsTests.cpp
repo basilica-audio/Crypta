@@ -221,3 +221,59 @@ TEST_CASE ("T17: meters are reset alongside the DSP", "[meters]")
     CHECK (processor.getMeterTaps().outputPeakLeft.load (std::memory_order_relaxed) == 0.0f);
     CHECK (processor.getMeterTaps().lowBandLevel.load (std::memory_order_relaxed) == 0.0f);
 }
+
+TEST_CASE ("Issue #12: getLowBandGainReductionDb() is the GUI-facing view of the same tap, on both detector engines", "[meters][compressor]")
+{
+    // The accessor a GR needle/meter polls on its timer. Two things have to
+    // hold for that to be safe and useful: it must return exactly what the
+    // lock-free tap holds (no second source of truth for the same number), and
+    // it must be alive on BOTH detector engines - including Classic Peak, which
+    // every migrated pre-v0.3.0 session runs on and which reported a flat zero
+    // before this release.
+    const auto measure = [] (float detectorIndex, float thresholdDb)
+    {
+        CryptaAudioProcessor processor;
+        processor.setPlayConfigDetails (1, 1, meterSampleRate, 512);
+        processor.prepareToPlay (meterSampleRate, 512);
+
+        TestHelpers::setParameter (processor, ParamIDs::gateEnabled, 0.0f);
+        TestHelpers::setParameter (processor, ParamIDs::eqEnabled, 0.0f);
+        TestHelpers::setParameter (processor, ParamIDs::lowCompDetector, detectorIndex);
+        TestHelpers::setParameter (processor, ParamIDs::lowCompThreshold, thresholdDb);
+        TestHelpers::setParameter (processor, ParamIDs::lowCompRatio, 8.0f);
+        TestHelpers::setParameter (processor, ParamIDs::lowCompKnee, 0.0f);
+        TestHelpers::setParameter (processor, ParamIDs::splitLowHz, 400.0f); // put the tone in the low band
+        processor.reset();
+
+        juce::AudioBuffer<float> buffer (1, 48000);
+        TestHelpers::fillWithSine (buffer, meterSampleRate, 100.0, 0.5f);
+        TestHelpers::renderThrough (processor, buffer);
+
+        struct Reading
+        {
+            float accessor;
+            float tap;
+        };
+
+        return Reading { processor.getLowBandGainReductionDb(),
+                          processor.getMeterTaps().lowCompGainReductionDb.load (std::memory_order_relaxed) };
+    };
+
+    for (const auto detectorIndex : { 0.0f, 1.0f }) // Classic Peak, Smooth RMS
+    {
+        const auto idle = measure (detectorIndex, -3.0f);
+        const auto working = measure (detectorIndex, -36.0f);
+
+        INFO ("detector index " << detectorIndex << ": idle " << idle.accessor
+                                 << " dB, working " << working.accessor << " dB");
+
+        // One number, two views of it.
+        CHECK (idle.accessor == idle.tap);
+        CHECK (working.accessor == working.tap);
+
+        // Positive dB of reduction, and it responds to the threshold.
+        CHECK (idle.accessor < 1.0f);
+        CHECK (working.accessor > 6.0f);
+        CHECK (working.accessor > idle.accessor + 5.0f);
+    }
+}

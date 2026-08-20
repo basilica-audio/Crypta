@@ -4,6 +4,8 @@
 
 #include <juce_dsp/juce_dsp.h>
 
+#include <cmath>
+
 // Low-band parallel ("New York style") compressor (issue #42): the low band
 // is compressed, made up, and blended back with its own uncompressed self
 // via lowCompMix, rather than inserted serially - which is what makes it a
@@ -83,11 +85,29 @@ namespace cryp
             return manualMakeupDb + (autoMakeup ? detector.getAutoMakeupDb() : 0.0f);
         }
 
-        // Peak gain reduction from the last processed block, positive dB.
-        // Only meaningful on the Smooth RMS path: juce::dsp::Compressor does
-        // not expose its internal gain, and reverse-engineering it from the
-        // audio would be guesswork.
-        float getGainReductionDb() const noexcept { return useSmoothRms ? detector.getGainReductionDb() : 0.0f; }
+        // Peak gain reduction across the last processed block, in POSITIVE
+        // decibels (0 = no reduction) - the direction a GR meter draws, and
+        // the unit cryp::MeterTaps::lowCompGainReductionDb publishes to the UI
+        // (issue #12: "gain reduction exposed atomically for metering").
+        //
+        // The two engines measure it differently, because they can:
+        //   - Smooth RMS owns its gain computer, so the figure is the exact
+        //     smoothed gain the detector applied (see LevelDetector).
+        //   - Classic Peak is juce::dsp::Compressor, which does not expose its
+        //     internal gain at all. Rather than report a flat 0 - which would
+        //     leave the meter dead for anyone on the legacy engine, including
+        //     every migrated pre-v0.3.0 session - process() measures the block
+        //     peak either side of the compressor and reports the ratio. That
+        //     is an ESTIMATE, and an honest one: for the steady-state material
+        //     a GR meter is read against it tracks the static curve closely
+        //     (asserted in tests/ParallelCompressorTests.cpp), while on a fast
+        //     transient it reports the block's worst case rather than an
+        //     instantaneous value. It is deliberately measured before the
+        //     makeup gain, so it shows compression, not net level change.
+        float getGainReductionDb() const noexcept
+        {
+            return useSmoothRms ? detector.getGainReductionDb() : classicGainReductionDb;
+        }
 
         // In-place parallel compression: mixer.pushDrySamples() captures the
         // pre-compression signal, the compressor + makeup gain run in place,
@@ -100,9 +120,24 @@ namespace cryp
             juce::dsp::ProcessContextReplacing<float> context (block);
 
             if (useSmoothRms)
+            {
                 detector.process (block);
+            }
             else
+            {
+                // Block-rate only: two O(n) peak passes, no per-sample cost
+                // added to the compressor itself, no allocation. See
+                // getGainReductionDb() for why this exists.
+                const auto peakBefore = blockPeak (block);
                 compressor.process (context);
+                const auto peakAfter = blockPeak (block);
+
+                constexpr float silenceFloor = 1.0e-6f;
+
+                classicGainReductionDb = (peakBefore > silenceFloor && peakAfter > silenceFloor)
+                                              ? juce::jmax (0.0f, juce::Decibels::gainToDecibels (peakBefore / peakAfter))
+                                              : 0.0f;
+            }
 
             makeupGain.process (context);
 
@@ -110,10 +145,29 @@ namespace cryp
         }
 
     private:
+        static float blockPeak (const juce::dsp::AudioBlock<float>& block) noexcept
+        {
+            float peak = 0.0f;
+
+            for (size_t channel = 0; channel < block.getNumChannels(); ++channel)
+            {
+                const auto* data = block.getChannelPointer (channel);
+
+                for (size_t sample = 0; sample < block.getNumSamples(); ++sample)
+                    peak = juce::jmax (peak, std::abs (data[sample]));
+            }
+
+            return peak;
+        }
+
         juce::dsp::Compressor<float> compressor;
         LevelDetector detector;
         bool useSmoothRms = false;
         bool autoMakeup = false;
+
+        // See getGainReductionDb(). Written once per block by process(), read
+        // by the processor's metering publish step on the same thread.
+        float classicGainReductionDb = 0.0f;
 
         juce::dsp::Gain<float> makeupGain;
         juce::dsp::DryWetMixer<float> mixer;
