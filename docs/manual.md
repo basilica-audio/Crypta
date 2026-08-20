@@ -29,7 +29,7 @@ Input Trim → Gate → LR4 Split Low (60–400 Hz, default 120 Hz)
         ┌─────────────┴───────────────────────────────┐
         │                                              │
      Low band                              Remainder → LR4 Split High (300–2000 Hz, default 600 Hz)
-  Parallel Comp → Level                                  │
+ Parallel Comp → Graaawl → Level                         │
         │                          ┌───────────────────┴───────────────────┐
         │                       Mid band                              High band
         │                    Drive → Level          Tight → Voicing → Drive → Tone → Blend → Level
@@ -170,6 +170,24 @@ The low band is compressed **in parallel**: the compressed signal is blended bac
 | Low Comp Auto Release | off/on | on | — | *Smooth RMS only.* Stretches the release on sustained material while leaving it at the set value for transients, so a held low note is not pumped. |
 | Low Comp Auto Makeup | off/on | off | — | Read by **both** detectors. Adds a fixed boost that compensates roughly half the gain the compressor takes away at the threshold, so changing the threshold does not also change your level. Summed with the manual Makeup control. |
 
+The gain reduction both detectors apply is published to the meters (and to any UI that asks for it) in positive dB. On **Smooth RMS** the figure is the detector's own gain; on **Classic Peak** it is estimated from the block's peak either side of the compressor, because `juce::dsp::Compressor` does not expose its internal gain — accurate on the steady material a meter is read against, worst-case-per-block on fast transients.
+
+### Low band: Graaawl (NEW in v0.4.0)
+
+**Graaawl** puts the woody, vocal, aggressive grind of a Warwick Thumb onto your low end without making it flabby. Off by default.
+
+It is not low-frequency distortion, and that distinction is the whole design. The Thumb's growl is an **asymmetric upper-mid character around 700 Hz – 2.2 kHz**, with a formant-like resonance near 1 kHz, sitting on top of a low end that stays tight. So Crypta generates that harmonic content in a **parallel branch** — an asymmetric saturator followed by a band-pass onto the formant window — and blends it on top of the untouched low band. Your fundamental never goes through a shaper. Measured on a 50 Hz probe with Amount at 100 %: the energy in the 20–150 Hz sub region changes by **less than 0.01 dB**, while the 700 Hz – 2.2 kHz window gains real signal.
+
+It sits **after** the low-band compressor and before Low Level, so the compressor has already made the input level predictable and the Amount control means the same thing from note to note.
+
+| Parameter | Range | Default | Unit | What it does |
+|---|---|---|---|---|
+| Graaawl | off/on | off | — | Enables the growl branch. Switched off it is a bit-exact bypass — not "almost transparent", literally the same samples. |
+| Graaawl Amount | 0 … 100 | 0 | % | How much growl is blended on top of the low band. A linear gain on the harmonic branch, so halving it is −6 dB. Level-dependent by design: the growl shows up when you dig in. |
+| Graaawl Tone | 0 … 100 | 50 | % | Moves the formant window: 800 Hz at 0 %, ~1130 Hz at 50 %, 1600 Hz at 100 %. Lower is woodier and louder (low harmonics carry more energy), higher is more nasal and more restrained. |
+
+The branch is antialiased arithmetically (ADAA-1) rather than by oversampling, which is why **Graaawl adds no latency at all** — switching it on mid-session can never shift your track. Measured alias-to-signal on a hot 50 Hz probe at 100 % Amount: **−86 dB at Tone 0, −105 dB at Tone 100**.
+
 ### Mid band: drive + level (NEW in v0.2.0)
 
 A dedicated mid band with staged/cascaded saturation, structurally similar to the High band's Wool voicing (two cascaded soft-clip stages) but with no filter, tone, or blend control of its own — matching the reference class's own Mid band exactly ("Mid Drive... Mid Level" only). This band's job is a distinct "throatier" grind character, separate from the High band's own presence/fuzz/harshness-control role.
@@ -232,7 +250,9 @@ A convolution-based cab-sim stage that now processes **only the Mid+High post-su
 | IR Enable | off/on | off | — | Enables the IR loader stage. |
 | IR Mix | 0 … 100 | 100 | % | Blend between the dry (pre-convolution) and fully convolved Mid+High signal. |
 
-*Loading impulse responses:* the Cabinet section of the editor exposes the two parameters above and nothing else — there is still **no in-plugin file browser and no bundled factory cabinet IRs**; both remain on the roadmap. The IR-loading DSP engine itself is fully implemented and real-time safe, and a host or wrapper that calls the plugin's IR-loading entry point works today.
+*Loading impulse responses:* the IR-loading engine and its **factory-IR slot mechanics** are complete — decoding an embedded WAV, installing it, and clearing back to the passthrough identity IR are all implemented and tested (`getNumFactoryImpulseResponses()` / `loadFactoryImpulseResponse()` / `clearImpulseResponse()`). The Cabinet section of the editor currently exposes the two parameters above and nothing else: there is **no in-plugin file browser yet**, and a host or wrapper that calls the plugin's IR-loading entry point works today.
+
+What is **not** shipped is content: **Crypta bundles no cabinet IRs**, and that is a deliberate licensing decision rather than an unfinished feature. Bundling a cab IR means redistributing someone else's recording inside every copy of the plugin, so the bar is a licence that is beyond doubt — CC0, an explicit public-domain dedication, or our own capture. "Free download" and "royalty free" are not licences. Nothing has cleared that bar yet; the bar itself is enforced in code (`src/dsp/FactoryIRs.h`) and asserted by the test suite, so an unverified IR cannot slip into a release build. Until then, load your own IRs — the stage is a guaranteed bit-exact passthrough with nothing loaded, at every session sample rate.
 
 ## State migration
 
@@ -296,7 +316,9 @@ Zero heap allocations on the audio thread, on **both** engines, with every v0.3.
 - **One deliberate departure from v0.2.0's output: the engaged safety clip.** If you had it switched on, v0.3.0 is not bit-identical - it aliases far less and is transparent below the ceiling. The difference is confined to material that was actually being clipped and is bounded (measured −26.5 dB relative on a fixture driven 12 dB past the ceiling). Everything else about a pre-v0.3.0 session or preset is sample-exact.
 - **Cross-toolchain bit-exactness is unattainable and is not claimed.** macOS is the golden platform; on Windows the bar is −60 dB relative, with the worst of three fixtures measured at −73 dB. The drift is not last-ulp noise - the gate and the low-band compressor both take decisions off a detector level, so a 1-ulp difference near a threshold can shift a transition by a sample.
 - **The GUI is a functional generic editor** plus a plain labelled meter readout row. The photoreal M3 GUI is a later milestone and will consume the same `MeterTaps` struct; the preset bar is a plain functional strip.
-- **Still no in-plugin IR browser and no bundled factory cabinet IRs.** The convolution engine is fully implemented and real-time safe, and is a guaranteed bit-exact passthrough with nothing loaded, at every session sample rate.
+- **No bundled factory cabinet IRs, by decision.** The slot mechanics, the decoder and the licence guard all ship and are tested; the asset table is empty because no IR has been sourced with a licence worth staking a redistributed binary on. The in-plugin file browser is the GUI milestone's work. The convolution engine is a guaranteed bit-exact passthrough with nothing loaded, at every session sample rate.
+- **Graaawl's voicing constants are engineering-derived starting points.** The shaper drive and asymmetry, the formant window and its resonance are chosen from what the growl demonstrably is, and every claim about them in this manual is a measurement — but the final voicing is an ear decision against a real Thumb 5 DI, and that gate (issue #36) is still open.
+- **Graaawl's sub protection is band-limiting, not magic.** The branch's own harmonics leak through the formant highpass's stopband: on a pure 50 Hz sine the third harmonic at 149 Hz sits about 51 dB below the fundamental. In aggregate the 20–150 Hz region moves by under 0.01 dB, and real bass material carries its own third harmonic some 30 dB louder than that, so this is inaudible — but it is not zero, and it is not claimed to be.
 - **Deliberately out of scope for v0.3.0, tracked openly:** factory IRs / IR browser / IR trim-align; the stereo strategy (low mono-sum toggle, Mid/High width); full per-sample Newton DK circuit simulation (v0.3.0 ships the calibrated factorised models; a full simulation is a possible later "HQ Circuit" mode); a lookahead gate and time-varying auto-release; linear-phase / HQ-offline oversampling modes and a shared suite-level oversampler module.
 - **The voicing is research-derived, never measured against hardware or against any reference product's audio, DSP source, or unit.** Where a model is a deliberate simplification, the docs say so.
 - **Pre-1.0 and AGPLv3** - breaking changes possible until v1.0.0. The v0.1.1 rename (plugin code `Cryp`, bundle id `com.yvesvogl.crypta`) means DAWs treat this as a new plugin relative to v0.1.0-era sessions.
@@ -307,4 +329,5 @@ Zero heap allocations on the audio thread, on **both** engines, with every v0.3.
 - **Split Low and Split High are tone decisions, not just technical ones.** Pushing Split Low up moves more note body out of the (compressed-only) Low band; pushing Split High up widens the Mid band's own passband, giving the "throatier" character more room before the High band's own fuzz/presence character takes over.
 - **High Tight is your main "fuzz vs. tightness" control**, independent of which voicing you've picked - pull it toward its 20 Hz floor for maximum fuzz, push it up toward 500 Hz for a tighter, more controlled top end. It also tames harshness on hot Drive settings.
 - **High Blend is your "how much" knob, High Drive is your "how hard" knob.** If a voicing feels too extreme, try lowering Blend before lowering Drive - you'll often keep more of the character that way, just at a lower overall intensity, rather than flattening the nonlinearity itself.
+- **Graaawl is a character layer, not a distortion amount.** Start at 30–40 % with Tone near the middle and listen for the vowel rather than for grit; if it starts sounding like a fuzz on the bottom end, you have gone past what the Thumb actually does. Because it sits after the compressor, changing Low Comp Threshold changes how hard the growl is driven — set the compressor first.
 - **Leave the safety clip off during tracking/mixing**, and only reach for it as insurance against unexpected automation or a hot input on a specific pass - it's a safety net, not part of the intended tone-shaping signal path.
