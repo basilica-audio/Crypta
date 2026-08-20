@@ -21,7 +21,7 @@ release is gated on `main` being green.
 | Check | How it is enforced | Where |
 |---|---|---|
 | Builds on both platforms | `cmake --build`, macOS built as a Universal Binary (arm64 + x86_64) | `ci.yml` matrix |
-| Unit + integration suite | `ctest --output-on-failure`, Catch2 — 156 test cases across 31 files | `tests/` |
+| Unit + integration suite | `ctest --output-on-failure`, Catch2 — 187 test cases across 35 files | `tests/` |
 | pluginval, maximum strictness | `pluginval --strictness-level 10 --validate` on the VST3, pinned to v1.0.4 by SHA-256 | `ci.yml` |
 | AU validation | `auval -strict -v aufx Cryp Yvsv` after installing the built `.component` | `ci.yml` |
 | No allocations on the audio thread | `AllocationGuard` around `processBlock` on both drive engines, across engine switches, oversized blocks and long silences | `tests/RobustnessTests.cpp` (`[realtime]`) |
