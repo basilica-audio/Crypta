@@ -9,7 +9,8 @@ flowchart LR
     GATE --> SPLIT1[LR4 Split Low<br/>60-400 Hz, default 120 Hz]
 
     SPLIT1 -->|Low band| LCOMP[Parallel Compressor<br/>+ Makeup + Mix]
-    LCOMP --> LLEVEL[Level]
+    LCOMP --> LGROWL[Graaawl<br/>parallel formant branch<br/>optional, zero latency]
+    LGROWL --> LLEVEL[Level]
     LLEVEL --> LALIGN[Phase-Align Allpass<br/>tied to Split High]
 
     SPLIT1 -->|Remainder| SPLIT2[LR4 Split High<br/>300-2000 Hz, default 600 Hz]
@@ -42,12 +43,30 @@ All three bands re-converge at the `Sum` stage. The Low band carries a compensat
 
 | Directory | Responsibility |
 |---|---|
-| `src/dsp` | All audio-thread DSP, each in its own class with a matching Catch2 test file: `Crossover` (LR4 split/sum, two cascaded instances - `lowSplit`, `midHighSplit`), `PhaseAlignFilter` (Low-band phase-alignment allpass - see below), `NoiseGateStage` (full-band input gate), `ParallelCompressor` (low-band dynamics), `MidBand` (mid-band staged drive, NEW in v0.2.0), `Voicing` (high-band Gnaw/Wool/Razor distortion + Tight pre-drive HPF + 4x oversampling + tone + blend), `BandEQ` (post-sum 4-band EQ), `IRLoader` (cab-sim convolution, relocated in v0.2.0 to the Mid+High branch), `SplitGap` (pure `clampSplitHighHz()` helper enforcing the minimum musical gap between the two crossover splits). **v0.3.0 adds** `ADAAShaper` (antiderivative antialiasing core, closed-form and tabulated), `CircuitDrive` (the Circuit engine: one shared oversampling region, OS-rate split, per-voicing circuit topologies), `LevelDetector` (log-domain RMS compressor detector with soft knee and program-dependent release), `GateEngine` (the Modern gate), `OutputClipper` (ADAA ceiling clip in delta form) and `MeterTaps` (lock-free metering). `RealtimeCoefficients.h` is a shared helper for updating `juce::dsp::IIR` filter coefficients from the audio thread without heap allocation (see below). No allocation, locks, or I/O once `prepareToPlay` has run. |
+| `src/dsp` | All audio-thread DSP, each in its own class with a matching Catch2 test file: `Crossover` (LR4 split/sum, two cascaded instances - `lowSplit`, `midHighSplit`), `PhaseAlignFilter` (Low-band phase-alignment allpass - see below), `NoiseGateStage` (full-band input gate), `ParallelCompressor` (low-band dynamics), `MidBand` (mid-band staged drive, NEW in v0.2.0), `Voicing` (high-band Gnaw/Wool/Razor distortion + Tight pre-drive HPF + 4x oversampling + tone + blend), `BandEQ` (post-sum 4-band EQ), `IRLoader` (cab-sim convolution, relocated in v0.2.0 to the Mid+High branch), `SplitGap` (pure `clampSplitHighHz()` helper enforcing the minimum musical gap between the two crossover splits). **v0.3.0 adds** `ADAAShaper` (antiderivative antialiasing core, closed-form and tabulated), `CircuitDrive` (the Circuit engine: one shared oversampling region, OS-rate split, per-voicing circuit topologies), `LevelDetector` (log-domain RMS compressor detector with soft knee and program-dependent release), `GateEngine` (the Modern gate), `OutputClipper` (ADAA ceiling clip in delta form) and `MeterTaps` (lock-free metering). **v0.4.0 adds** `LowGrowl` (the Graaawl low-band growl branch - see below) and `FactoryIRs` (factory-IR slot mechanics and the licence guard). `RealtimeCoefficients.h` is a shared helper for updating `juce::dsp::IIR` filter coefficients from the audio thread without heap allocation (see below). No allocation, locks, or I/O once `prepareToPlay` has run. |
 | `src/params` | Parameter layout and `AudioProcessorValueTreeState` definitions — parameter IDs, ranges, defaults, and value-to-DSP mapping. Single source of truth for what a preset captures. |
 | `src/presets` | M2 preset system (`PresetManager`, `PresetBar`, `Localisation`) - see [Preset system](#preset-system-m2) below. |
 | `src/gui` | The vector editor's component family, ported from `basilica-audio/Miserere`'s M3 editor: `BasilicaLookAndFeel` (palette, typography, knob/toggle/button painting, shared focus ring), `PointerKnob` (keyboard-operable rotary), `KeyboardSteps` (WAI-ARIA slider stepping), `BusPanel` (section faceplate + accessibility group) and `NeedleMeter` (two-scale vector meter). Talks to the processor only through `src/params` (attachments) and read-only metering data — never reaches into `src/dsp` internals directly. `src/PluginEditor.{h,cpp}` composes them. |
 
 Dependency direction is one-way: `src/gui` → `src/params` ← `src/presets`, and `src/dsp` is driven by `src/params` values but has no upward dependency on UI, presets, or state code. This keeps the DSP core testable in isolation (see `tests/`) without instantiating any UI or persistence machinery.
+
+## Graaawl: a generative, band-limited low-band growl (v0.4.0)
+
+The Warwick Thumb growl is not low-frequency distortion. It is an asymmetric upper-mid character in roughly 700 Hz - 2.2 kHz with a formant-like resonance near 1 kHz, over a low end that stays tight. Shaping the fundamental directly produces intermodulation mud, so `LowGrowl` generates the character in a parallel branch and blends it on top of an untouched dry low band.
+
+Two design points are worth recording, because both differ from the naive reading of the feature request:
+
+**The harmonics are generated, not extracted.** The obvious sketch - highpass the low band at 300-400 Hz and shape what is left - cannot work here: this stage sits *inside* the Low band, below an LR4 split whose default is 120 Hz, so at 350 Hz there is nothing but 37 dB of stopband leakage. Instead the branch drives the fundamental into an asymmetric saturator (`tanh(g·x + b) − tanh(b)`, g = 6, b = 0.35) and then band-passes onto the formant window. For a 50 Hz fundamental that window is harmonics 14-44; the bias is what puts even harmonics there alongside the odd ones, which is the woody half of the character rather than pure grind. The band-pass sits *after* the shaper, and that - not a pre-filter - is what guarantees the sub is untouched.
+
+**The branch is antialiased arithmetically, not by oversampling.** The nonlinearity is a moderate tanh fed by a band already lowpassed at 400 Hz or below, its output is band-limited before it reaches the sum, and ADAA-1 (`ADAAShaper.h`) takes another 20-30 dB off what remains. Measured alias-to-signal on a hot 50 Hz probe at full growl: −86 dB at Tone 0, −105 dB at Tone 100. That buys the property oversampling could not: **zero latency**, so enabling Graaawl never re-reports latency, never needs a compensating delay on the dry path, and the OFF state can be a structural bit-exact bypass (`process()` returns without touching the block once the gain ramp has reached zero) rather than an approximation.
+
+Each band edge is a 4th-order Butterworth built from its own two pole-pair sections (Q = 0.5412 and Q = 1.3065) rather than two identical Q = 0.7071 sections, so the passband stays flat and the stated corners really are the −3 dB points.
+
+## Factory IR slots and the licence guard (v0.4.0)
+
+`FactoryIRs.{h,cpp}` is the mechanism for bundling cab IRs in the binary: an asset table of `{name, licence, source, bytes}`, a WAV/AIFF decoder that runs on the message thread, and `IRLoader::clearImpulseResponse()` for the slot list's "None" entry. The table the plugin ships is **empty** - no impulse response has been sourced with a licence worth staking a redistributed AGPLv3 binary on.
+
+The licence bar is enforced in code rather than in a README: `FactoryIRLibrary`'s constructor drops any asset that does not name an approved licence (`CC0-1.0`, `Public Domain`, `Self-recorded`) *and* a non-empty checkable source, and counts the drops. `tests/FactoryIRTests.cpp` asserts that the shipped table loses nothing to that filter, so an IR added later without provenance fails the build instead of silently shipping. `resources/irs/LICENSES.md` is the human-readable half of the same record.
 
 ## Cascaded 3-band flat-sum and phase alignment
 

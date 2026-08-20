@@ -35,5 +35,9 @@ namespace cryp
         detector.reset();
         makeupGain.reset();
         mixer.reset();
+
+        // A meter must not keep displaying reduction that belongs to material
+        // the transport has already left behind.
+        classicGainReductionDb = 0.0f;
     }
 }

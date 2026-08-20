@@ -101,19 +101,38 @@ TEST_CASE ("Processor instantiates with the expected parameters", "[processor][p
             ParamIDs::lowCompKnee,      ParamIDs::lowCompAutoRelease, ParamIDs::lowCompAutoMakeup,
             ParamIDs::gateMode,         ParamIDs::gateHysteresis,   ParamIDs::gateHold,
             ParamIDs::gateScHpf,        ParamIDs::gateRange,        ParamIDs::clipCeiling,
+
+            // v0.4.0 Graaawl (issue #36).
+            ParamIDs::lowGrowl,         ParamIDs::lowGrowlAmount,   ParamIDs::lowGrowlTone,
         };
 
         for (const auto* id : allIds)
             CHECK (apvts.getParameter (id) != nullptr);
     }
 
-    SECTION ("total parameter count matches the full v0.3.0 layout")
+    SECTION ("total parameter count matches the full v0.4.0 layout")
     {
         // v0.2.0's 39 (4 IO/global + 5 gate + 2 crossover + 7 low band
         // + 2 mid band + 6 high band + 11 EQ + 2 IR) plus v0.3.0's 12
         // circuit-engine additions (2 drive engine + 4 low comp detector
-        // + 5 gate mode + 1 clip ceiling) = 51.
-        CHECK (apvts.processor.getParameters().size() == 51);
+        // + 5 gate mode + 1 clip ceiling) = 51, plus v0.4.0's 3 Graaawl
+        // parameters = 54.
+        CHECK (apvts.processor.getParameters().size() == 54);
+    }
+
+    SECTION ("v0.4.0 Graaawl defaults are inert (issue #36)")
+    {
+        // The whole low band's backward compatibility rests on these three:
+        // Graaawl off, and an Amount that would be silent even if something
+        // turned it on. If any of them ever gained a non-neutral default, every
+        // pre-v0.4.0 session and preset - none of which name these IDs - would
+        // quietly change its low end on load.
+        checkBoolDefault (apvts, ParamIDs::lowGrowl, false);
+        checkFloatDefault (apvts, ParamIDs::lowGrowlAmount, 0.0f);
+        checkFloatDefault (apvts, ParamIDs::lowGrowlTone, 50.0f);
+
+        checkFloatRange (apvts, ParamIDs::lowGrowlAmount, 0.0f, 100.0f);
+        checkFloatRange (apvts, ParamIDs::lowGrowlTone, 0.0f, 100.0f);
     }
 
     SECTION ("v0.3.0 engine selectors default to the new circuit engines")

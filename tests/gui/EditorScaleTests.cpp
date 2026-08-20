@@ -271,7 +271,7 @@ TEST_CASE ("Persisting the scale does not disturb parameter state", "[gui][scale
     restored.setStateInformation (savedState.getData(), (int) savedState.getSize());
 
     // Every parameter came back...
-    CHECK ((int) restored.getParameters().size() == 51);
+    CHECK ((int) restored.getParameters().size() == 54);
     CHECK (restored.apvts.getRawParameterValue ("highDrive")->load()
            == Catch::Approx (73.5f).margin (1.0e-2));
 
@@ -287,7 +287,7 @@ TEST_CASE ("Persisting the scale does not disturb parameter state", "[gui][scale
         if (child.hasType ("PARAM"))
             ++paramChildren;
 
-    CHECK (paramChildren == 51);
+    CHECK (paramChildren == 54);
 }
 
 TEST_CASE ("Loading a state saved before the scale existed opens at the default size", "[gui][scale][state]")

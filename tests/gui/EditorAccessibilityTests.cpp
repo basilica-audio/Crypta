@@ -226,7 +226,7 @@ TEST_CASE ("No knob ever displays more than two decimal places", "[gui][a11y]")
         ++knobsChecked;
     });
 
-    CHECK (knobsChecked == 44);
+    CHECK (knobsChecked == 46);
 }
 
 TEST_CASE ("Choice knobs announce the current choice by NAME, not by index", "[gui][a11y]")
@@ -295,11 +295,11 @@ TEST_CASE ("Every interactive control is keyboard-focusable and named", "[gui][a
         CHECK (toggle.getTitle().isNotEmpty());
     });
 
-    // 40 float + 4 choice parameters = 44 knobs; 7 bool parameters = 7
+    // 42 float + 4 choice parameters = 46 knobs; 8 bool parameters = 8
     // toggles (see src/params/ParameterIds.h). A zero-match walk must not
     // pass vacuously.
-    CHECK (slidersSeen == 44);
-    CHECK (togglesSeen == 7);
+    CHECK (slidersSeen == 46);
+    CHECK (togglesSeen == 8);
 
     // The preset bar's buttons are stock juce::TextButtons - focusable by
     // default, and none may have opted out. Save/Delete start DISABLED
@@ -368,7 +368,7 @@ TEST_CASE ("Keyboard focus order follows the signal flow", "[gui][a11y]")
     }
 
     // Every parameter control is reachable by Tab, exactly once.
-    CHECK (interactiveControls == 51);
+    CHECK (interactiveControls == 54);
 
     // The preset bar comes first (its 6 enabled buttons; Save and Delete
     // start disabled and are correctly out of the tab order).
@@ -610,7 +610,7 @@ TEST_CASE ("Each section is an accessibility focus container that does not trap 
     visitDescendants<juce::Slider> (editor, [&] (juce::Slider& s) { isInsideExactlyOnePanel (s); });
     visitDescendants<juce::ToggleButton> (editor, [&] (juce::ToggleButton& t) { isInsideExactlyOnePanel (t); });
 
-    CHECK (controlsChecked == 51);
+    CHECK (controlsChecked == 54);
 }
 
 TEST_CASE ("Needle meters expose a read-only, unit-suffixed accessible value per stage", "[gui][a11y]")

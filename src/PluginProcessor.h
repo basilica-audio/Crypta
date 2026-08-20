@@ -6,7 +6,9 @@
 #include "dsp/BandEQ.h"
 #include "dsp/CircuitDrive.h"
 #include "dsp/Crossover.h"
+#include "dsp/FactoryIRs.h"
 #include "dsp/IRLoader.h"
+#include "dsp/LowGrowl.h"
 #include "dsp/MeterTaps.h"
 #include "dsp/MidBand.h"
 #include "dsp/NoiseGateStage.h"
@@ -91,6 +93,44 @@ public:
     // thread only (e.g. in response to a future GUI file picker or preset
     // load), never from processBlock() or any audio-thread callback.
     void loadImpulseResponse (juce::AudioBuffer<float> irBuffer, double irSampleRate);
+
+    //==============================================================================
+    // Factory IR slots (issue #21). The mechanism is complete and tested; the
+    // asset table it reads is EMPTY, because no impulse response has been
+    // sourced with a licence this project will stake a distributed binary on -
+    // see src/dsp/FactoryIRs.h for the licence bar and the follow-up issue.
+    // A GUI IR slot list is expected to render getNumFactoryImpulseResponses()
+    // entries plus a "None" entry wired to clearImpulseResponse(); with the
+    // table empty that list contains only "None", which is exactly the current
+    // (safe, passthrough) behaviour.
+    //
+    // All three are message-thread only.
+    // The raw asset table the library is built from. Public and static so the
+    // licence guard in tests/FactoryIRTests.cpp can check the table itself
+    // rather than only what survived construction - a dropped asset is exactly
+    // the failure that must not pass review unnoticed.
+    static std::vector<cryp::FactoryIRAsset> getFactoryIRAssetTable();
+
+    int getNumFactoryImpulseResponses() const noexcept { return factoryIRs.getNumAssets(); }
+    juce::String getFactoryImpulseResponseName (int index) const { return factoryIRs.getName (index); }
+
+    // Decodes and loads factory IR `index`. False (and no change to the
+    // running convolution) for an out-of-range index or undecodable data.
+    bool loadFactoryImpulseResponse (int index);
+
+    // Restores the bit-exact passthrough identity IR - the IR slot's "None".
+    void clearImpulseResponse();
+
+    // Peak low-band gain reduction from the last processed block, in POSITIVE
+    // decibels (0 = no reduction). Reads the same lock-free tap the meters
+    // publish (cryp::MeterTaps::lowCompGainReductionDb, a relaxed atomic), so
+    // it is safe to call from the UI thread at any time - this is the accessor
+    // a GR needle/meter component should poll on its timer rather than reaching
+    // into the DSP objects. Issue #12 / #13.
+    float getLowBandGainReductionDb() const noexcept
+    {
+        return meterTaps.lowCompGainReductionDb.load (std::memory_order_relaxed);
+    }
 
     // Lock-free metering, written by the audio thread and read by the UI (or
     // by tests). See src/dsp/MeterTaps.h - reading is always safe, from any
@@ -179,8 +219,16 @@ private:
     // construction with no compensation needed).
     cryp::PhaseAlignFilter lowBandPhaseAlign;
 
-    // Low band: parallel compressor, then level trim.
+    // Low band: parallel compressor, then the optional Graaawl branch, then
+    // level trim.
     cryp::ParallelCompressor lowCompressor;
+
+    // v0.4.0 "Graaawl" (issue #36): a parallel, band-limited harmonic branch
+    // sitting after the compressor (so the growl amount is predictable rather
+    // than tracking whatever the compressor is doing) and before lowLevel.
+    // Zero latency and a structural bit-exact bypass when off - see
+    // src/dsp/LowGrowl.h.
+    cryp::LowGrowl lowGrowlStage;
 
     // Mid band (NEW in v0.2.0): staged/cascaded drive only, then level trim.
     cryp::MidBand midBand;
@@ -229,6 +277,9 @@ private:
     // enforced in processChunk() below, not just by convention.
     cryp::BandEQ eq;
     cryp::IRLoader irLoader;
+
+    // Issue #21's asset table. Empty as shipped - see getFactoryIRAssetTable().
+    cryp::FactoryIRLibrary factoryIRs { getFactoryIRAssetTable() };
 
     // v0.3.0 safety clip: ADAA ceiling clip in delta form, replacing the raw
     // base-rate std::tanh (see src/dsp/OutputClipper.h).
@@ -316,6 +367,10 @@ private:
     std::atomic<float>* lowCompReleaseMs = nullptr;
     std::atomic<float>* lowCompMakeupDb = nullptr;
     std::atomic<float>* lowCompMixPercent = nullptr;
+
+    std::atomic<float>* lowGrowlEnabled = nullptr;
+    std::atomic<float>* lowGrowlAmountPercent = nullptr;
+    std::atomic<float>* lowGrowlTonePercent = nullptr;
 
     std::atomic<float>* midDrivePercent = nullptr;
 

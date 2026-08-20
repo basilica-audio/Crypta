@@ -153,6 +153,15 @@ CryptaAudioProcessorEditor::CryptaAudioProcessorEditor (CryptaAudioProcessor& pr
     addKnob (low, ParamIDs::lowCompMix, "Mix");
     addKnob (low, ParamIDs::lowLevel, "Low Level");
 
+    // v0.4.0 Graaawl (issue #36) gets its own row rather than being mixed into
+    // the compressor's control set: it is a separate mode on the low band, and
+    // it sits after the compressor in the signal path, so the reading order of
+    // this panel keeps matching the order processChunk() applies things in.
+    addRow (low);
+    addToggle (low, ParamIDs::lowGrowl, "Graaawl");
+    addKnob (low, ParamIDs::lowGrowlAmount, "Growl Amt");
+    addKnob (low, ParamIDs::lowGrowlTone, "Growl Tone");
+
     lowCompMeter = &addMeter (low, "Low band compressor gain reduction meter", "COMP",
                               basilica::gui::NeedleMeter::Scale::gainReductionDb);
 

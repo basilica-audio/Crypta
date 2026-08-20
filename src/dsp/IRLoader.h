@@ -84,6 +84,18 @@ namespace cryp
         // class-level threading comment above.
         void loadImpulseResponse (juce::AudioBuffer<float> irBuffer, double irSampleRate);
 
+        // Restores the safe-by-default state: the correctly-rate-tagged
+        // single-sample identity impulse response prepare() installs, i.e. a
+        // bit-exact passthrough, and a reported tail length of 0. This is what
+        // an IR slot's "None" entry calls (issue #21's slot mechanics) - the
+        // convolution engine has no "unload" of its own, so "no IR" has to be
+        // expressed as an explicit identity load. Message-thread only, and
+        // serialised against prepare()/loadImpulseResponse() by the same
+        // mutex. Safe to call before prepare(): it then falls back to the
+        // ProcessSpec default rate, exactly as an unprepared Convolution
+        // would.
+        void clearImpulseResponse();
+
         // Issue #58: the currently-loaded IR's own duration in seconds
         // (numSamples / irSampleRate at the time it was loaded - a duration
         // is invariant under Convolution's internal resampling to the
@@ -117,6 +129,12 @@ namespace cryp
         // (the identity IR installed by prepare() has a negligible/zero
         // tail by design).
         double loadedIrTailSeconds = 0.0;
+
+        // The rate prepare() was last called with; see clearImpulseResponse().
+        // Defaults to juce::dsp::ProcessSpec's own conventional default so a
+        // pre-prepare() call behaves no worse than the JUCE fallback it
+        // replaces.
+        double preparedSampleRate = 44100.0;
 
         // Serialises prepare() against loadImpulseResponse() - see the
         // class-level threading comment above. Recursive rather than plain,

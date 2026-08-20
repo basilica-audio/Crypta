@@ -247,7 +247,7 @@ TEST_CASE ("State migration v2: an explicit engine choice in legacy state is nev
     CHECK (getChoiceIndex (processor, ParamIDs::gateMode) == classicEngineIndex);
 }
 
-TEST_CASE ("State migration v2: state saved by v0.3.0 round-trips with stateVersion=2 and all 51 parameters", "[state][migration]")
+TEST_CASE ("State migration v2: state saved by v0.3.0 round-trips with stateVersion=2 and all 54 parameters", "[state][migration]")
 {
     CryptaAudioProcessor source;
 
@@ -272,7 +272,12 @@ TEST_CASE ("State migration v2: state saved by v0.3.0 round-trips with stateVers
 
     // The version marker itself, and the full parameter set.
     CHECK (xml->getIntAttribute ("stateVersion") == 2);
-    CHECK (xml->getNumChildElements() == 51);
+
+    // 51 as of v0.3.0, plus v0.4.0's three Graaawl parameters. Those three
+    // need no schema bump of their own: their defaults ARE the legacy
+    // behaviour (Graaawl off), so state that never mentions them lands on
+    // exactly what v0.3.0 did - see ParamIDs' lowGrowl comment.
+    CHECK (xml->getNumChildElements() == 54);
 
     // Round-trip: because the state IS versioned, the migration must NOT fire
     // and must not drag the engines back to Classic.

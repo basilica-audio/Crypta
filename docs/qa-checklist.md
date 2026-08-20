@@ -21,14 +21,14 @@ release is gated on `main` being green.
 | Check | How it is enforced | Where |
 |---|---|---|
 | Builds on both platforms | `cmake --build`, macOS built as a Universal Binary (arm64 + x86_64) | `ci.yml` matrix |
-| Unit + integration suite | `ctest --output-on-failure`, Catch2 — 156 test cases across 31 files | `tests/` |
+| Unit + integration suite | `ctest --output-on-failure`, Catch2 — 187 test cases across 35 files | `tests/` |
 | pluginval, maximum strictness | `pluginval --strictness-level 10 --validate` on the VST3, pinned to v1.0.4 by SHA-256 | `ci.yml` |
 | AU validation | `auval -strict -v aufx Cryp Yvsv` after installing the built `.component` | `ci.yml` |
 | No allocations on the audio thread | `AllocationGuard` around `processBlock` on both drive engines, across engine switches, oversized blocks and long silences | `tests/RobustnessTests.cpp` (`[realtime]`) |
 | Block-size independence | An oversized host block renders sample-identically to the same signal fed in properly-sized sub-blocks | `tests/ChunkingTests.cpp` |
 | No NaN/Inf, no crash on degenerate input | Denormal-range input, zero-sample buffers, bypassed and active | `tests/RobustnessTests.cpp` |
 | Deterministic render vs. committed goldens | Legacy v0.2.0 sessions still render identically under the current engine; the engaged safety clip stays inside its documented −40 dB null | `tests/GoldenRenderTests.cpp` |
-| State round-trip | Every parameter of the full set survives save → load; v2 state round-trips with all 51 parameters | `tests/StateTests.cpp`, `tests/StateMigrationTests.cpp` |
+| State round-trip | Every parameter of the full set survives save → load; v2 state round-trips with all 54 parameters | `tests/StateTests.cpp`, `tests/StateMigrationTests.cpp` |
 | State migration | v0.1 and v0.2 sessions migrate deterministically; explicit user choices are never overwritten | `tests/StateMigrationTests.cpp` |
 | Preset round-trip and rejection | Save → load restores every parameter; foreign-plugin and wrong-format presets are refused; every factory preset parses, loads and is in range | `tests/PresetManagerTests.cpp` |
 | `reset()` clears stage state | Silence right after a loud signal is actually silent | `tests/ResetTests.cpp` |

@@ -218,6 +218,10 @@ CryptaAudioProcessor::CryptaAudioProcessor()
     lowCompMakeupDb = apvts.getRawParameterValue (ParamIDs::lowCompMakeup);
     lowCompMixPercent = apvts.getRawParameterValue (ParamIDs::lowCompMix);
 
+    lowGrowlEnabled = apvts.getRawParameterValue (ParamIDs::lowGrowl);
+    lowGrowlAmountPercent = apvts.getRawParameterValue (ParamIDs::lowGrowlAmount);
+    lowGrowlTonePercent = apvts.getRawParameterValue (ParamIDs::lowGrowlTone);
+
     midDrivePercent = apvts.getRawParameterValue (ParamIDs::midDrive);
 
     highTightHzParam = apvts.getRawParameterValue (ParamIDs::highTightHz);
@@ -280,6 +284,10 @@ CryptaAudioProcessor::CryptaAudioProcessor()
     jassert (lowCompReleaseMs != nullptr);
     jassert (lowCompMakeupDb != nullptr);
     jassert (lowCompMixPercent != nullptr);
+
+    jassert (lowGrowlEnabled != nullptr);
+    jassert (lowGrowlAmountPercent != nullptr);
+    jassert (lowGrowlTonePercent != nullptr);
 
     jassert (midDrivePercent != nullptr);
 
@@ -429,6 +437,16 @@ void CryptaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     // value is read and passed in here rather than set afterwards.
     lowCompressor.prepare (spec, lowCompMixPercent->load (std::memory_order_relaxed) / 100.0f);
 
+    // v0.4.0 Graaawl branch on the low band. Its controls are pushed in
+    // before prepare() so the internal gain smoother starts at the value the
+    // session actually has (rather than ramping up from zero on the first
+    // block of a session that was saved with Graaawl on) - the same class of
+    // priming the DryWetMixer stages above need.
+    lowGrowlStage.setEnabled (lowGrowlEnabled->load (std::memory_order_relaxed) >= 0.5f);
+    lowGrowlStage.setAmount (lowGrowlAmountPercent->load (std::memory_order_relaxed) / 100.0f);
+    lowGrowlStage.setTone (lowGrowlTonePercent->load (std::memory_order_relaxed) / 100.0f);
+    lowGrowlStage.prepare (spec);
+
     // Mid band: staged drive, no DryWetMixer (no blend control - see
     // cryp::MidBand's class docs), so no priming gotcha here.
     midBand.prepare (spec);
@@ -569,6 +587,7 @@ void CryptaAudioProcessor::reset()
     midHighSplit.reset();
     lowBandPhaseAlign.reset();
     lowCompressor.reset();
+    lowGrowlStage.reset();
     midBand.reset();
     highVoicing.reset();
     circuitDrive.reset();
@@ -670,6 +689,13 @@ void CryptaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     lowCompressor.setMakeupGainDb (
         lowCompressor.getEffectiveMakeupDb (lowCompMakeupDb->load (std::memory_order_relaxed)));
 
+    // v0.4.0 Graaawl. Read every block like every other control; the stage
+    // itself decides whether it has any work to do (and does none at all once
+    // it is off and faded out - see cryp::LowGrowl::process()).
+    lowGrowlStage.setEnabled (lowGrowlEnabled->load (std::memory_order_relaxed) >= 0.5f);
+    lowGrowlStage.setAmount (lowGrowlAmountPercent->load (std::memory_order_relaxed) / 100.0f);
+    lowGrowlStage.setTone (lowGrowlTonePercent->load (std::memory_order_relaxed) / 100.0f);
+
     midBand.setDrive (midDrivePercent->load (std::memory_order_relaxed) / 100.0f);
 
     highVoicing.setTightHz (highTightHzParam->load (std::memory_order_relaxed));
@@ -763,6 +789,14 @@ void CryptaAudioProcessor::processChunk (juce::dsp::AudioBlock<float>& chunk) no
     // (see PluginProcessor.h's lowBandPhaseAlign member docs / class-level
     // proof in src/dsp/PhaseAlignFilter.h).
     lowCompressor.process (lowBlock);
+
+    // v0.4.0 Graaawl (issue #36), inserted after the compressor and before the
+    // level trim exactly as the issue specifies: the compressor keeps the lows
+    // tight, so the growl branch sees a predictable input level and the amount
+    // control means the same thing from note to note. Adds nothing to the
+    // signal - not even a rounding difference - while it is switched off.
+    lowGrowlStage.process (lowBlock);
+
     lowGainProcessor.process (juce::dsp::ProcessContextReplacing<float> (lowBlock));
     lowBandPhaseAlign.process (lowBlock);
 
@@ -1098,6 +1132,44 @@ void CryptaAudioProcessor::setStateInformation (const void* data, int sizeInByte
 void CryptaAudioProcessor::loadImpulseResponse (juce::AudioBuffer<float> irBuffer, double irSampleRate)
 {
     irLoader.loadImpulseResponse (std::move (irBuffer), irSampleRate);
+}
+
+std::vector<cryp::FactoryIRAsset> CryptaAudioProcessor::getFactoryIRAssetTable()
+{
+    // EMPTY, DELIBERATELY (issue #21). Bundling a cab IR means redistributing
+    // someone else's recording inside every copy of this plugin, so the bar is
+    // a licence that is beyond doubt - CC0, an explicit public-domain
+    // dedication, or our own capture (see src/dsp/FactoryIRs.h). Nothing that
+    // clears that bar has been sourced yet, and "free download" is not a
+    // licence. The mechanism around this table is complete and tested; adding
+    // an entry is a content decision plus a BinaryData line in CMakeLists.txt,
+    // not an engineering change.
+    //
+    // Each future entry looks like:
+    //   { "Basilica 4x10 (SM57 cone)", "Self-recorded",
+    //     "Basilica Audio, 2026-xx-xx, Ampeg 4x10 / SM57 / 2 cm off-axis",
+    //     BinaryData::basilica4x10_wav, BinaryData::basilica4x10_wavSize },
+    // and must also be listed in resources/irs/LICENSES.md.
+    return {};
+}
+
+bool CryptaAudioProcessor::loadFactoryImpulseResponse (int index)
+{
+    juce::AudioBuffer<float> irBuffer;
+    double irSampleRate = 0.0;
+
+    // Decode first, install second: a failed decode must leave whatever is
+    // currently loaded playing, not drop the convolution into silence.
+    if (! factoryIRs.decode (index, irBuffer, irSampleRate))
+        return false;
+
+    irLoader.loadImpulseResponse (std::move (irBuffer), irSampleRate);
+    return true;
+}
+
+void CryptaAudioProcessor::clearImpulseResponse()
+{
+    irLoader.clearImpulseResponse();
 }
 
 //==============================================================================
