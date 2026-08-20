@@ -89,10 +89,16 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
           cmake --build build --target Crypta_AU Crypta_VST3 Crypta_Standalone --parallel 3
 
-      - name: Import signing certificate (throwaway keychain)
+      - name: Import signing certificates (throwaway keychain)
+        # The Developer ID *Installer* certificate, when it exists, is imported
+        # here rather than in the .pkg step: this is the only place the
+        # throwaway keychain's password is in scope, so it never has to be
+        # written to GITHUB_ENV for a later step to re-use.
         env:
           CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
           CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          INSTALLER_CERT_P12: ${{ secrets.APPLE_INSTALLER_CERT_P12 }}
+          INSTALLER_CERT_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERT_PASSWORD }}
         run: |
           set -euo pipefail
           KC=$RUNNER_TEMP/release.keychain-db
@@ -103,10 +109,14 @@ jobs:
           echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
           security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$CERT_PASSWORD" -T /usr/bin/codesign
           rm "$RUNNER_TEMP/cert.p12"
+          if [ -n "${INSTALLER_CERT_P12:-}" ]; then
+            echo "$INSTALLER_CERT_P12" | base64 --decode > "$RUNNER_TEMP/installer.p12"
+            security import "$RUNNER_TEMP/installer.p12" -k "$KC" -P "$INSTALLER_CERT_PASSWORD" -T /usr/bin/productsign
+            rm "$RUNNER_TEMP/installer.p12"
+          fi
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PASS" "$KC"
           security list-keychains -d user -s "$KC" login.keychain
           echo "KEYCHAIN=$KC" >> "$GITHUB_ENV"
-          echo "KEYCHAIN_PASSWORD=$KC_PASS" >> "$GITHUB_ENV"
 
       - name: Sign, notarize, staple, package
         env:
@@ -170,26 +180,14 @@ jobs:
         # APPLE_INSTALLER_CERT_PASSWORD at org level is the only manual step
         # left; everything below is ready for it.
         env:
-          INSTALLER_CERT_P12: ${{ secrets.APPLE_INSTALLER_CERT_P12 }}
-          INSTALLER_CERT_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERT_PASSWORD }}
           API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
           set -euo pipefail
-          if [ -z "${INSTALLER_CERT_P12:-}" ]; then
-            echo "::notice::APPLE_INSTALLER_CERT_P12 is not set - skipping the .pkg installer (see issue #31). The signed/notarized zip is unaffected."
-            exit 0
-          fi
-
-          echo "$INSTALLER_CERT_P12" | base64 --decode > "$RUNNER_TEMP/installer.p12"
-          security import "$RUNNER_TEMP/installer.p12" -k "$KEYCHAIN" \
-            -P "$INSTALLER_CERT_PASSWORD" -T /usr/bin/productsign
-          rm "$RUNNER_TEMP/installer.p12"
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          INSTALLER_IDENTITY=$(security find-identity -v "$KEYCHAIN" | grep "Developer ID Installer" | head -1 | sed 's/.*"\(.*\)"/\1/')
+          INSTALLER_IDENTITY=$(security find-identity -v "$KEYCHAIN" | grep "Developer ID Installer" | head -1 | sed 's/.*"\(.*\)"/\1/' || true)
           if [ -z "$INSTALLER_IDENTITY" ]; then
-            echo "::error::APPLE_INSTALLER_CERT_P12 imported but no 'Developer ID Installer' identity found in the keychain."
-            exit 1
+            echo "::notice::No 'Developer ID Installer' identity in the keychain - skipping the .pkg installer (see issue #31). The signed/notarized zip is unaffected."
+            exit 0
           fi
 
           VERSION="${GITHUB_REF_NAME#v}"
