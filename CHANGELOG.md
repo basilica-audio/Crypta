@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-07-31
+
+### Fixed
+
+- **Serialised the IR loader against concurrent `prepare()` / `loadImpulseResponse()`** (`src/dsp/IRLoader.{h,cpp}`, #72). Both call into `juce::dsp::Convolution::loadImpulseResponse()`, whose background hand-off is documented safe from only one thread at a time, while `prepare()` runs on the host's `prepareToPlay()` thread and the public `CryptaAudioProcessor::loadImpulseResponse()` is reachable independently from another. A mutex serialising the two closes the race; it is never taken by `process()`, `reset()` or `setWetMixProportion()`, so the audio thread stays lock- and allocation-free. Stress-testing confirmed the race was live: an unfixed build reliably double-freed inside JUCE's convolution command storage on the first aggressive run, the fixed build survived 30/30 repeats.
+- Added the missing allocation-guard self-test (`tests/RobustnessTests.cpp`), proving `AllocationCounter` actually detects an allocation — every existing `[realtime]` test only asserted *zero* allocations, so the guard itself was never shown to work.
+
 ## [0.3.0] - 2026-07-27
 
 ### Added (headline: the Circuit drive engine)
