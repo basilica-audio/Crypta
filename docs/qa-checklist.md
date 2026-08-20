@@ -28,7 +28,7 @@ release is gated on `main` being green.
 | Block-size independence | An oversized host block renders sample-identically to the same signal fed in properly-sized sub-blocks | `tests/ChunkingTests.cpp` |
 | No NaN/Inf, no crash on degenerate input | Denormal-range input, zero-sample buffers, bypassed and active | `tests/RobustnessTests.cpp` |
 | Deterministic render vs. committed goldens | Legacy v0.2.0 sessions still render identically under the current engine; the engaged safety clip stays inside its documented −40 dB null | `tests/GoldenRenderTests.cpp` |
-| State round-trip | Every parameter of the full set survives save → load; v2 state round-trips with all 51 parameters | `tests/StateTests.cpp`, `tests/StateMigrationTests.cpp` |
+| State round-trip | Every parameter of the full set survives save → load; v2 state round-trips with all 54 parameters | `tests/StateTests.cpp`, `tests/StateMigrationTests.cpp` |
 | State migration | v0.1 and v0.2 sessions migrate deterministically; explicit user choices are never overwritten | `tests/StateMigrationTests.cpp` |
 | Preset round-trip and rejection | Save → load restores every parameter; foreign-plugin and wrong-format presets are refused; every factory preset parses, loads and is in range | `tests/PresetManagerTests.cpp` |
 | `reset()` clears stage state | Silence right after a loud signal is actually silent | `tests/ResetTests.cpp` |

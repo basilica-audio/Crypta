@@ -70,7 +70,7 @@ A fresh instance loads a user "Default" preset if you've saved one ("Set current
 
 ## The interface
 
-The plugin window is laid out **in signal order**, left to right and top to bottom, in ten sections: Input, Noise Gate, Crossover, Low Band, Drive Engine, Mid Band, High Band, Cabinet, EQ, Output. Whatever you see further right or further down happens later in the chain. Every one of the plugin's 51 parameters is on the front panel — nothing is hidden behind a menu.
+The plugin window is laid out **in signal order**, left to right and top to bottom, in ten sections: Input, Noise Gate, Crossover, Low Band, Drive Engine, Mid Band, High Band, Cabinet, EQ, Output. Whatever you see further right or further down happens later in the chain. Every one of the plugin's 54 parameters is on the front panel — nothing is hidden behind a menu.
 
 **Knobs.** Drag up/down or left/right to turn; hold **Shift** while dragging for fine adjustment. Knobs with a fixed set of positions (Gate Mode, Low Comp Detector, Drive Engine, High Voicing) click into their detents and show the option's name. Double-click a value box to type an exact number.
 

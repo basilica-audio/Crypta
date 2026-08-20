@@ -33,6 +33,9 @@ This table is the human-readable companion to the machine-checked one: `tests/gu
 | Low Band | Makeup | Knob | `lowCompMakeup` |
 | Low Band | Mix | Knob | `lowCompMix` |
 | Low Band | Low Level | Knob | `lowLevel` |
+| Low Band | Graaawl | Lamp toggle | `lowGrowl` |
+| Low Band | Growl Amt | Knob | `lowGrowlAmount` |
+| Low Band | Growl Tone | Knob | `lowGrowlTone` |
 | Low Band | COMP | Needle meter | — (reads `cryp::MeterTaps`) |
 | Drive Engine | Engine | Knob | `driveEngine` |
 | Mid Band | Mid Drive | Knob | `midDrive` |

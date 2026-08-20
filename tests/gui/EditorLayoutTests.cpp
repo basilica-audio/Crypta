@@ -70,13 +70,14 @@ TEST_CASE ("Every automatable parameter has exactly one attached control", "[gui
     visitDescendants<juce::Slider> (editor, [&] (juce::Slider&) { ++sliders; });
     visitDescendants<juce::ToggleButton> (editor, [&] (juce::ToggleButton&) { ++toggles; });
 
-    // The APVTS carries 40 float + 4 choice + 7 bool parameters = 51
-    // (src/params/ParameterIds.h). One knob per float/choice parameter, one
-    // toggle per bool parameter - no parameter may be left off the surface,
-    // and no control may exist without a parameter.
-    CHECK ((int) processor.getParameters().size() == 51);
-    CHECK (sliders == 44);
-    CHECK (toggles == 7);
+    // The APVTS carries 42 float + 4 choice + 8 bool parameters = 54
+    // (src/params/ParameterIds.h; v0.4.0 added the three Graaawl controls to
+    // the Low Band panel). One knob per float/choice parameter, one toggle per
+    // bool parameter - no parameter may be left off the surface, and no
+    // control may exist without a parameter.
+    CHECK ((int) processor.getParameters().size() == 54);
+    CHECK (sliders == 46);
+    CHECK (toggles == 8);
     CHECK (sliders + toggles == (int) processor.getParameters().size());
 }
 
@@ -174,7 +175,7 @@ TEST_CASE ("All controls, labels and meters stay inside their panel; panels stay
         CHECK (s.getY() >= basilica::gui::BusPanel::headerHeight);
     });
 
-    CHECK (controlsBelowHeader == 44);
+    CHECK (controlsBelowHeader == 46);
 }
 
 TEST_CASE ("No two interactive controls or meters overlap", "[gui][layout]")
@@ -200,9 +201,9 @@ TEST_CASE ("No two interactive controls or meters overlap", "[gui][layout]")
     visitDescendants<juce::ToggleButton> (editor, [&] (juce::ToggleButton& t) { collect (t); });
     visitDescendants<basilica::gui::NeedleMeter> (editor, [&] (basilica::gui::NeedleMeter& m) { collect (m); });
 
-    // 44 knobs + 7 toggles + 4 meters - the pairwise scan below must not
+    // 46 knobs + 8 toggles + 4 meters - the pairwise scan below must not
     // pass vacuously on an empty collection.
-    REQUIRE (entries.size() == 55);
+    REQUIRE (entries.size() == 58);
 
     for (size_t i = 0; i < entries.size(); ++i)
     {
@@ -277,8 +278,8 @@ TEST_CASE ("Every knob's visible label text matches its accessible title (label-
         }
     });
 
-    // Every one of the 44 knobs carries an attached, matching label.
-    CHECK (labelledKnobs == 44);
+    // Every one of the 46 knobs carries an attached, matching label.
+    CHECK (labelledKnobs == 46);
 
     // Toggles carry their own legend, which must equally match their title.
     int toggleCount = 0;
@@ -289,7 +290,7 @@ TEST_CASE ("Every knob's visible label text matches its accessible title (label-
         CHECK (toggle.getButtonText() == toggle.getTitle());
     });
 
-    CHECK (toggleCount == 7);
+    CHECK (toggleCount == 8);
 }
 
 TEST_CASE ("The section panels appear in signal-flow order, top-left to bottom-right", "[gui][layout]")
