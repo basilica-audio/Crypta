@@ -172,6 +172,38 @@ namespace cryp
             100.0f,
             juce::AudioParameterFloatAttributes().withLabel ("%")));
 
+        //======================================================================
+        // Low band "Graaawl" mode (NEW in v0.4.0, issue #36). Opt-in and
+        // neutral by default: with lowGrowl off, cryp::LowGrowl::process()
+        // returns without touching the block, so the low band is bit-identical
+        // to v0.3.0 and no state/preset migration is needed for these three
+        // IDs (contrast the v0.3.0 engine selectors, whose new defaults DID
+        // require one).
+        //
+        // lowGrowlAmount's default is 0 % rather than the "musical start"
+        // ~40 % the issue suggests: a parameter that is inert while its enable
+        // switch is off should still read as inert when the switch is turned
+        // on, so the first thing a user hears after enabling Graaawl is their
+        // own move on the Amount control, not a preset opinion.
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { ParamIDs::lowGrowl, 1 },
+            "Graaawl",
+            false));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::lowGrowlAmount, 1 },
+            "Graaawl Amount",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
+            0.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("%")));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::lowGrowlTone, 1 },
+            "Graaawl Tone",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
+            50.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("%")));
+
         layout.add (std::make_unique<juce::AudioParameterFloat> (
             juce::ParameterID { ParamIDs::lowLevel, 1 },
             "Low Level",

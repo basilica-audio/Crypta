@@ -56,6 +56,21 @@ namespace ParamIDs
     inline constexpr auto lowLevel = "lowLevel";
 
     //==============================================================================
+    // Low band: "Graaawl" mode (NEW in v0.4.0, issue #36) - a parallel,
+    // band-limited harmonic branch inserted after the low-band compressor and
+    // before lowLevel. Opt-in: `lowGrowl` defaults to OFF, so every existing
+    // session and preset - none of which name these IDs - keeps its low band
+    // bit-identical without needing a state-schema migration (unlike the
+    // v0.3.0 engine selectors below, whose defaults are deliberately NOT the
+    // legacy behaviour and therefore do need one).
+    //
+    // The user-facing display name is "Graaawl"; the IDs stay plain
+    // identifiers.
+    inline constexpr auto lowGrowl = "lowGrowl";
+    inline constexpr auto lowGrowlAmount = "lowGrowlAmount";
+    inline constexpr auto lowGrowlTone = "lowGrowlTone";
+
+    //==============================================================================
     // Mid band (NEW in v0.2.0): drive + level only - no filter/tone/blend,
     // matching the reference class's own Mid band exactly (docs/design-brief.md).
     inline constexpr auto midDrive = "midDrive";

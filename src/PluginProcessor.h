@@ -8,6 +8,7 @@
 #include "dsp/Crossover.h"
 #include "dsp/FactoryIRs.h"
 #include "dsp/IRLoader.h"
+#include "dsp/LowGrowl.h"
 #include "dsp/MeterTaps.h"
 #include "dsp/MidBand.h"
 #include "dsp/NoiseGateStage.h"
@@ -218,8 +219,16 @@ private:
     // construction with no compensation needed).
     cryp::PhaseAlignFilter lowBandPhaseAlign;
 
-    // Low band: parallel compressor, then level trim.
+    // Low band: parallel compressor, then the optional Graaawl branch, then
+    // level trim.
     cryp::ParallelCompressor lowCompressor;
+
+    // v0.4.0 "Graaawl" (issue #36): a parallel, band-limited harmonic branch
+    // sitting after the compressor (so the growl amount is predictable rather
+    // than tracking whatever the compressor is doing) and before lowLevel.
+    // Zero latency and a structural bit-exact bypass when off - see
+    // src/dsp/LowGrowl.h.
+    cryp::LowGrowl lowGrowlStage;
 
     // Mid band (NEW in v0.2.0): staged/cascaded drive only, then level trim.
     cryp::MidBand midBand;
@@ -358,6 +367,10 @@ private:
     std::atomic<float>* lowCompReleaseMs = nullptr;
     std::atomic<float>* lowCompMakeupDb = nullptr;
     std::atomic<float>* lowCompMixPercent = nullptr;
+
+    std::atomic<float>* lowGrowlEnabled = nullptr;
+    std::atomic<float>* lowGrowlAmountPercent = nullptr;
+    std::atomic<float>* lowGrowlTonePercent = nullptr;
 
     std::atomic<float>* midDrivePercent = nullptr;
 
