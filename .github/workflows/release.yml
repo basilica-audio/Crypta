@@ -22,6 +22,8 @@ jobs:
     name: Create release
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+
       - name: Create the GitHub release for this tag (idempotent)
         # Both release-macos and release-windows upload assets via
         # `gh release upload`, which requires the release object to already
@@ -29,9 +31,33 @@ jobs:
         # "release not found" on a fresh tag push. `gh release view` first
         # makes re-runs (e.g. after a transient build failure) idempotent
         # instead of erroring on an already-created release.
+        #
+        # Release notes come from the CHANGELOG section matching the tag
+        # (issue #30's "changelog section extraction"): the awk block prints
+        # everything between `## [x.y.z]` and the next `## [` heading. A tag
+        # without a CHANGELOG section - v0.3.1 shipped that way - falls back
+        # to --generate-notes rather than publishing an empty body.
         run: |
           set -euo pipefail
-          if ! gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists - leaving its notes untouched."
+            exit 0
+          fi
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VERSION" '
+            BEGIN { found = 0 }
+            /^## \[/ {
+              if (found) exit
+              if ($0 ~ "^## \\[" ver "\\]") { found = 1; next }
+            }
+            found
+          ' CHANGELOG.md > notes.md
+          if [ -s notes.md ]; then
+            echo "Using CHANGELOG section for $VERSION ($(wc -l < notes.md) lines)."
+            gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
+              --title "$GITHUB_REF_NAME" --notes-file notes.md
+          else
+            echo "::warning::No CHANGELOG section for $VERSION - falling back to generated notes."
             gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
               --title "$GITHUB_REF_NAME" --generate-notes
           fi
@@ -80,6 +106,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PASS" "$KC"
           security list-keychains -d user -s "$KC" login.keychain
           echo "KEYCHAIN=$KC" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PASSWORD=$KC_PASS" >> "$GITHUB_ENV"
 
       - name: Sign, notarize, staple, package
         env:
@@ -120,20 +147,123 @@ jobs:
           xcrun notarytool submit notarize-me.zip \
             --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$API_KEY_ID" --issuer "$API_ISSUER_ID" \
             --wait --timeout 30m
-          rm "$RUNNER_TEMP/AuthKey.p8"
           for B in stage/AU/*.component stage/VST3/*.vst3 stage/Standalone/*.app; do
             xcrun stapler staple "$B"
           done
           SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           ditto -c -k --norsrc --noextattr --noqtn --noacl stage "$SLUG-$GITHUB_REF_NAME-macos.zip"
           echo "ASSET=$SLUG-$GITHUB_REF_NAME-macos.zip" >> "$GITHUB_ENV"
+          echo "SLUG=$SLUG" >> "$GITHUB_ENV"
+
+      - name: Build signed .pkg installer
+        # Issue #31. The bundles in stage/ are already signed, notarized and
+        # stapled by the previous step; this wraps them in a distribution
+        # installer that drops each format in its canonical location.
+        #
+        # A .pkg is only worth shipping if it is signed with a **Developer ID
+        # Installer** certificate: notarytool refuses an unsigned .pkg, and an
+        # un-notarized installer is blocked by Gatekeeper - strictly worse for
+        # users than the plain zip. That certificate is a separate Apple
+        # certificate type from the Developer ID *Application* cert this repo
+        # already has, so the step no-ops (with a notice, not a failure) until
+        # the secret exists. Adding APPLE_INSTALLER_CERT_P12 +
+        # APPLE_INSTALLER_CERT_PASSWORD at org level is the only manual step
+        # left; everything below is ready for it.
+        env:
+          INSTALLER_CERT_P12: ${{ secrets.APPLE_INSTALLER_CERT_P12 }}
+          INSTALLER_CERT_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERT_PASSWORD }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${INSTALLER_CERT_P12:-}" ]; then
+            echo "::notice::APPLE_INSTALLER_CERT_P12 is not set - skipping the .pkg installer (see issue #31). The signed/notarized zip is unaffected."
+            exit 0
+          fi
+
+          echo "$INSTALLER_CERT_P12" | base64 --decode > "$RUNNER_TEMP/installer.p12"
+          security import "$RUNNER_TEMP/installer.p12" -k "$KEYCHAIN" \
+            -P "$INSTALLER_CERT_PASSWORD" -T /usr/bin/productsign
+          rm "$RUNNER_TEMP/installer.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          INSTALLER_IDENTITY=$(security find-identity -v "$KEYCHAIN" | grep "Developer ID Installer" | head -1 | sed 's/.*"\(.*\)"/\1/')
+          if [ -z "$INSTALLER_IDENTITY" ]; then
+            echo "::error::APPLE_INSTALLER_CERT_P12 imported but no 'Developer ID Installer' identity found in the keychain."
+            exit 1
+          fi
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p pkgroot/au pkgroot/vst3 pkgroot/app pkgcomp pkgout
+          cp -R stage/AU/*.component pkgroot/au/
+          cp -R stage/VST3/*.vst3 pkgroot/vst3/
+          cp -R stage/Standalone/*.app pkgroot/app/
+
+          # BundleIsRelocatable is switched off on every component: all three
+          # JUCE bundles carry the same CFBundleIdentifier, so a relocatable
+          # install would happily drop the AU on top of whatever copy Spotlight
+          # finds first instead of the canonical plug-in folder.
+          build_component () {
+            local name="$1" root="$2" dest="$3" ident="$4"
+            pkgbuild --analyze --root "$root" "pkgcomp/$name.plist"
+            /usr/libexec/PlistBuddy -c "Add :0:BundleIsRelocatable bool false" "pkgcomp/$name.plist" \
+              || /usr/libexec/PlistBuddy -c "Set :0:BundleIsRelocatable false" "pkgcomp/$name.plist"
+            pkgbuild --root "$root" --component-plist "pkgcomp/$name.plist" \
+              --identifier "$ident" --version "$VERSION" \
+              --install-location "$dest" "pkgcomp/$name.pkg"
+          }
+          build_component au   pkgroot/au   "/Library/Audio/Plug-Ins/Components" "com.yvesvogl.crypta.au"
+          build_component vst3 pkgroot/vst3 "/Library/Audio/Plug-Ins/VST3"       "com.yvesvogl.crypta.vst3"
+          build_component app  pkgroot/app  "/Applications"                      "com.yvesvogl.crypta.standalone"
+
+          cat > pkgcomp/distribution.xml <<XML
+          <?xml version="1.0" encoding="utf-8"?>
+          <installer-gui-script minSpecVersion="2">
+              <title>Crypta $VERSION</title>
+              <options customize="always" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+              <domains enable_localSystem="true" enable_currentUserHome="false" enable_anywhere="false"/>
+              <choices-outline>
+                  <line choice="au"/>
+                  <line choice="vst3"/>
+                  <line choice="app"/>
+              </choices-outline>
+              <choice id="au" title="Audio Unit (AU)" description="Installs Crypta.component into /Library/Audio/Plug-Ins/Components."><pkg-ref id="com.yvesvogl.crypta.au"/></choice>
+              <choice id="vst3" title="VST3" description="Installs Crypta.vst3 into /Library/Audio/Plug-Ins/VST3."><pkg-ref id="com.yvesvogl.crypta.vst3"/></choice>
+              <choice id="app" title="Standalone app" description="Installs Crypta.app into /Applications."><pkg-ref id="com.yvesvogl.crypta.standalone"/></choice>
+              <pkg-ref id="com.yvesvogl.crypta.au" version="$VERSION">au.pkg</pkg-ref>
+              <pkg-ref id="com.yvesvogl.crypta.vst3" version="$VERSION">vst3.pkg</pkg-ref>
+              <pkg-ref id="com.yvesvogl.crypta.standalone" version="$VERSION">app.pkg</pkg-ref>
+          </installer-gui-script>
+          XML
+
+          PKG="$SLUG-$GITHUB_REF_NAME-macos.pkg"
+          productbuild --distribution pkgcomp/distribution.xml --package-path pkgcomp "pkgout/unsigned.pkg"
+          productsign --sign "$INSTALLER_IDENTITY" --keychain "$KEYCHAIN" "pkgout/unsigned.pkg" "$PKG"
+          pkgutil --check-signature "$PKG"
+
+          # AuthKey.p8 is still on disk from the signing step; the
+          # "Delete throwaway keychain" post step removes it.
+          xcrun notarytool submit "$PKG" \
+            --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$API_KEY_ID" --issuer "$API_ISSUER_ID" \
+            --wait --timeout 30m
+          xcrun stapler staple "$PKG"
+          xcrun stapler validate "$PKG"
+          echo "PKG_ASSET=$PKG" >> "$GITHUB_ENV"
 
       - name: Delete throwaway keychain
         if: always()
-        run: security delete-keychain "$KEYCHAIN" || true
+        run: |
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
+          security delete-keychain "$KEYCHAIN" || true
 
       - name: Attach to release
-        run: gh release upload "$GITHUB_REF_NAME" "$ASSET" --clobber -R "$GITHUB_REPOSITORY"
+        run: |
+          set -euo pipefail
+          shasum -a 256 "$ASSET" > "$ASSET.sha256"
+          gh release upload "$GITHUB_REF_NAME" "$ASSET" "$ASSET.sha256" --clobber -R "$GITHUB_REPOSITORY"
+          if [ -n "${PKG_ASSET:-}" ]; then
+            shasum -a 256 "$PKG_ASSET" > "$PKG_ASSET.sha256"
+            gh release upload "$GITHUB_REF_NAME" "$PKG_ASSET" "$PKG_ASSET.sha256" --clobber -R "$GITHUB_REPOSITORY"
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -181,7 +311,9 @@ jobs:
           cp -R "$VST3_DIR/"*.vst3 stage/VST3/
           cp "$STANDALONE_DIR/"*.exe stage/Standalone/
           SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
-          cd stage && 7z a "../$SLUG-$GITHUB_REF_NAME-windows.zip" . && cd ..
-          gh release upload "$GITHUB_REF_NAME" "$SLUG-$GITHUB_REF_NAME-windows.zip" --clobber -R "$GITHUB_REPOSITORY"
+          ASSET="$SLUG-$GITHUB_REF_NAME-windows.zip"
+          cd stage && 7z a "../$ASSET" . && cd ..
+          sha256sum "$ASSET" > "$ASSET.sha256"
+          gh release upload "$GITHUB_REF_NAME" "$ASSET" "$ASSET.sha256" --clobber -R "$GITHUB_REPOSITORY"
         env:
           GH_TOKEN: ${{ github.token }}

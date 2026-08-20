@@ -9,7 +9,7 @@
 [![CI](https://github.com/basilica-audio/Crypta/actions/workflows/ci.yml/badge.svg)](https://github.com/basilica-audio/Crypta/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-> **Work in progress.** Crypta is pre-1.0 and under active development (v0.2.0). Binaries for macOS and Windows are available from the [Releases](../../releases) page (macOS builds are signed & notarized); building from source works too. Expect breaking changes until v1.0.0 ships (see [Roadmap](#roadmap)).
+> **Work in progress.** Crypta is pre-1.0 and under active development. Binaries for macOS and Windows are published on the [Releases](../../releases) page (macOS builds are signed, notarized and stapled); building from source works too. Expect breaking changes until v1.0.0 ships (see [Roadmap](#roadmap)).
 
 ## What it is
 
@@ -103,7 +103,7 @@ editor taken in the GUI test suite, not drawn by hand. See
 
 ## Installation
 
-No pre-built binaries are published yet (see the work-in-progress notice above). Once releases begin, installation will follow the standard plugin locations:
+Download the archive for your platform from the [Releases](../../releases) page and copy the bundles into the standard plugin locations. Each archive ships with a `.sha256` file, so a download can be verified with `shasum -a 256 -c <asset>.sha256`.
 
 **macOS**
 
@@ -155,11 +155,14 @@ VST is a registered trademark of Steinberg Media Technologies GmbH.
 
 Crypta is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Neural DSP or the makers of any Parallax-branded product; any naming similarity refers only to the general "parallel bass processing" concept, not to any specific commercial product.
 
-## Releases & installation
+## Releases
 
-Tagged releases (`v*`) are built and published automatically by [`.github/workflows/release.yml`](.github/workflows/release.yml):
+Tagged releases (`v*`) are built and published automatically by [`.github/workflows/release.yml`](.github/workflows/release.yml) — nothing is built or uploaded by hand. Release notes are the matching section of [`CHANGELOG.md`](CHANGELOG.md).
 
-- **macOS** — AU (`.component`), VST3 (`.vst3`), and Standalone, Universal Binary (arm64 + x86_64), signed with a Developer ID Application certificate (org-level secrets, shared across the Basilica Audio suite), notarized, and stapled. Installs and opens without a Gatekeeper warning.
-- **Windows** — VST3 and Standalone, **unsigned**. On first run, Windows SmartScreen may show a "Windows protected your PC" warning; choose **More info → Run anyway** to proceed. A signed Windows build is a documented future improvement, not yet available.
+- **macOS** — AU (`.component`), VST3 (`.vst3`) and Standalone, Universal Binary (arm64 + x86_64), signed with a Developer ID Application certificate (org-level secrets, shared across the Basilica Audio suite), notarized and stapled. Installs and opens without a Gatekeeper warning.
+- **Windows** — VST3 and Standalone, **unsigned**. On first run, Windows SmartScreen may show a "Windows protected your PC" warning; choose **More info**, then **Run anyway**. Authenticode signing needs a paid certificate and is not part of this phase.
+- Every archive is accompanied by a `.sha256` checksum file.
 
-See [`v0.1.1`](https://github.com/basilica-audio/Crypta/releases/tag/v0.1.1) for the most recent published release; `v0.2.0` is the next tagged release, shipping the 2-band → 3-band topology rebuild and the M2 preset system.
+A `.pkg` installer for macOS is wired up in the release workflow but not yet shipped: it requires a *Developer ID Installer* certificate, a different Apple certificate type from the application-signing one this repo uses. The step stays inert until that certificate exists. See [`docs/building.md`](docs/building.md#macos-pkg-installer) for the full release process and the secret names.
+
+The latest published version is always on the [Releases](../../releases) page.
