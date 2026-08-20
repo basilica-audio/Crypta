@@ -81,6 +81,12 @@ juce_add_binary_data(CryptaBinaryData SOURCES
     presets/factory/circuitGrind.json
     presets/factory/circuitKnife.json
     resources/i18n/de.txt
+    # Suite typography (M3/M6 vector editor, issues #45/#25): EB Garamond,
+    # OFL licensed (resources/fonts/OFL-EBGaramond.txt) - consumed by
+    # src/gui/BasilicaLookAndFeel.cpp as the single source of every glyph
+    # the fully JUCE-drawn editor renders.
+    resources/fonts/EBGaramond-Regular.ttf
+    resources/fonts/EBGaramond-SemiBold.ttf
 )
 
 # ==============================================================================

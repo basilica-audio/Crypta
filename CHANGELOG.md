@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added (headline: the custom vector GUI)
+
+- **A fully vector-drawn editor** (`src/gui/`, `src/PluginEditor.{h,cpp}`), replacing the v0.1–v0.3 preset bar + `GenericAudioProcessorEditor` stack. Ported from the suite's proven M3 component family (`basilica-audio/Miserere` PR #31): `BasilicaLookAndFeel` (pointer knobs with engraved scale rings, detented choice knobs, lamp toggles, gold-on-black suite palette), `PointerKnob`, `BusPanel`, `KeyboardSteps` and `NeedleMeter`. No bitmaps: every knob, lamp, panel, needle and glyph is drawn at runtime with `juce::Graphics`/`juce::Path`. Typography is EB Garamond, embedded via `BinaryData` (OFL, `resources/fonts/OFL-EBGaramond.txt`), so the editor renders identically on macOS and Windows. Closes #45, #25.
+- **The complete parameter surface, laid out in signal-flow order** across ten section panels — Input, Noise Gate, Crossover, Low Band, Drive Engine, Mid Band, High Band, Cabinet, EQ, Output. All 51 parameters are on the front panel: 44 knobs (40 float + 4 choice; choice knobs are detented and announce the choice *name*) and 7 lamp toggles. Closes #26.
+- **Four needle meters reading the v0.3.0 metering backend** (`src/dsp/MeterTaps.h`): input and output peak (dBFS, fast-attack/slow-release ballistics, warning zone from 0 dBFS) plus gate and low-band-compressor gain reduction (positive dB, symmetric ballistics). Driven by a single 30 Hz GUI-thread timer over relaxed atomic loads — the audio thread is never touched. Closes #27.
+- **A resizable, aspect-ratio-locked editor with the scale persisted in plugin state.** The surface is laid out once at its design size and the window is a uniform scale transform on it (0.6×–1.8×), so no window size can re-flow or clip the layout. The chosen scale is stored as a root property on the APVTS state tree and therefore round-trips through the existing `get`/`setStateInformation()` pair; a pre-existing session without it opens at unity. Closes #28.
+- **Accessibility as a shipped feature, not a follow-up** (closes #46): every control is keyboard-focusable with WAI-ARIA-style stepping (Arrow = 1 % of range, Shift+Arrow = fine, PageUp/Down = 10 %, Home/End = extremes; one detent per press on choice knobs), a gold focus ring with a dark halo on every focusable control, accessible name/role/value on every control (units included — `-12.00 dB`, not `-12.00`), each section exposed to screen readers as a named group without trapping Tab, focus order equal to the signal flow, and meters exposed as read-only value text. All of it is asserted headlessly against real `AccessibilityHandler`s.
+
+### Changed
+
+- `docs/architecture.md`'s module map now describes `src/gui` (the vector component family) instead of the placeholder `src/ui` row.
+
+### Notes
+
+- WCAG contrast is enforced by tests against the same colour accessors the LookAndFeel paints with, so a palette tweak that drops a text pair below AA 4.5:1 fails the build rather than shipping.
+
 ## [0.3.1] - 2026-07-31
 
 ### Fixed

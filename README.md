@@ -33,7 +33,9 @@ Crypta is a Parallax-style bass plugin built on JUCE 8. As of v0.2.0 it splits y
 - **Delay-compensated, phase-aligned signal path** — the Mid+High branch's shared oversampling latency is reported to the host, the low band is time-aligned to match, and a phase-alignment allpass filter keeps the cascaded three-way sum flat-magnitude
 - **Presets** — factory + user presets, save/save-as/delete, import/export (single files and zip banks), German localisation of the preset UI frame
 - **State migration** — a v0.1.x session's single crossover frequency is migrated to the new Split High parameter on load
-- **Metering** throughout the signal chain *(planned, alongside the custom GUI)*
+- **Custom vector GUI** — a fully drawn (no bitmaps) black-and-gold editor: ten sections laid out in signal order carrying all 51 parameters, pointer knobs with engraved scale rings, lamp toggles, and a resizable, aspect-locked window whose zoom level is saved with the session
+- **Metering** — input and output peak plus gate and low-band compressor gain reduction, on four needle meters driven at 30 Hz from the lock-free metering taps
+- **Accessible by design** — full keyboard operability with WAI-ARIA-style stepping, a visible focus ring, screen-reader names/roles/values with units, signal-flow focus order and WCAG AA contrast, all enforced by tests
 
 ## Signal flow
 
@@ -142,7 +144,7 @@ ctest --test-dir build --output-on-failure
 | M0 | Bootstrap — project skeleton, CI, docs | Done |
 | M1 | DSP completion & test coverage — gate, crossover, parallel compressor, 3 voicings (oversampled), 4-band EQ, IR loader, latency compensation, broadened test suite | Done (v0.1.0) |
 | M2 | Deep-dive topology rebuild (2-band → 3-band) + presets & state recall — preset manager, 9 factory presets, state migration, German localisation | Done (v0.2.0) |
-| M3 | GUI & accessibility — custom LookAndFeel, metering UI, accessibility pass | Planned |
+| M3 | GUI & accessibility — custom vector LookAndFeel, full parameter surface, metering UI, resizable editor with stored scale, accessibility pass | Done |
 | M4 | Release: signing, notarization, v1.0.0 — installers, tagged release | Planned |
 
 ## License
@@ -150,6 +152,8 @@ ctest --test-dir build --output-on-failure
 Crypta is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPLv3).
 
 This project uses [JUCE](https://juce.com) 8, whose open-source tier is licensed under AGPLv3 (as of JUCE 8; JUCE 7 and earlier used GPLv3), which is why this project is AGPLv3 rather than GPLv3. See [`docs/adr/0002-agplv3-licensing.md`](docs/adr/0002-agplv3-licensing.md) for the full reasoning.
+
+The editor embeds the [EB Garamond](https://github.com/octaviopardo/EBGaramond12) typeface, licensed under the [SIL Open Font License 1.1](resources/fonts/OFL-EBGaramond.txt) — a copy of that licence ships with the source and inside the plugin's own resources.
 
 VST is a registered trademark of Steinberg Media Technologies GmbH.
 
