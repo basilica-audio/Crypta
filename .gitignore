@@ -39,3 +39,6 @@ DerivedData/
 # Misc
 *.log
 .cache/
+
+# Claude Code (agent worktrees + local settings)
+.claude/
