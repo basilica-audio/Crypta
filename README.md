@@ -78,6 +78,29 @@ See [`docs/manual.md`](docs/manual.md) for the complete, musically-annotated par
 | EQ | Enable, Low Shelf Freq/Gain, Peak 1 Freq/Gain/Q, Peak 2 Freq/Gain/Q, High Shelf Freq/Gain |
 | IR loader | Enable, Mix |
 
+## Interface & brand
+
+The plugin icon — a gold serpent coiled around a bass clef, antique-gold
+bas-relief on a flat near-black squircle — is the header image above, and is
+committed at [`docs/assets/icon.png`](docs/assets/icon.png) (1024×1024) and
+[`docs/assets/icon-256.png`](docs/assets/icon-256.png) (256×256). Motif,
+palette, master locations and the archived logo drafts are documented in
+[`docs/branding.md`](docs/branding.md). All artwork is self-made and therefore
+license-clean under this repo's AGPLv3.
+
+**Editor.** Crypta currently ships the M2 preset bar and the v0.3.0 metering
+readout above JUCE's generic parameter editor — deliberately plain, so every
+APVTS parameter has a working control while the DSP is still moving. The
+custom LookAndFeel, band-section layout, metering UI and resizable editor are
+the M3 milestone (#45, #25, #26, #27, #28).
+
+**Screenshot.** There is no GUI screenshot in this README yet, and no
+placeholder image standing in for one. Once the M3 editor lands, the rendered
+preview is committed at `docs/gui-preview.png` and linked here, following the
+suite convention: the image is produced by an offscreen snapshot of the real
+editor taken in the GUI test suite, not drawn by hand. See
+[`docs/branding.md`](docs/branding.md#gui-preview) for the exact route.
+
 ## Installation
 
 No pre-built binaries are published yet (see the work-in-progress notice above). Once releases begin, installation will follow the standard plugin locations:
