@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `docs/architecture.md`'s module map now describes `src/gui` (the vector component family) instead of the placeholder `src/ui` row.
 
+- **A generated editor preview** at `docs/gui-preview.png`, rendered by the GUI test suite from the real editor (`tests/gui/GuiPreviewSnapshotTests.cpp`) rather than drawn by hand, plus `docs/gui-mapping.md` listing which control drives which parameter.
+
 ### Notes
 
 - WCAG contrast is enforced by tests against the same colour accessors the LookAndFeel paints with, so a palette tweak that drops a text pair below AA 4.5:1 fails the build rather than shipping.

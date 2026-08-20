@@ -140,6 +140,95 @@ TEST_CASE ("Knob accessible value strings include their declared unit", "[gui][a
     }
 }
 
+TEST_CASE ("Knob value strings are readable, not raw float precision", "[gui][a11y]")
+{
+    CryptaAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 512);
+    CryptaAudioProcessorEditor editor (processor);
+
+    struct Expectation
+    {
+        const char* panel;
+        const char* label;
+        const char* expectedText;
+    };
+
+    // The log-mapped ranges (Hz/ms) are built from custom NormalisableRange
+    // conversion lambdas, for which JUCE 8.0.14's AudioParameterFloat::
+    // getText() falls back to full float precision - a default Split Low
+    // renders as "119.9999847", which does not fit a 74 px value box and
+    // gets ellipsised. These are the strings the editor must show instead.
+    const Expectation expectations[] = {
+        { "Input", "Input Gain", "0.00 dB" },
+        { "Noise Gate", "Threshold", "-60.0 dB" },
+        { "Noise Gate", "Ratio", "10.0:1" },        // ratio units attach without a space
+        { "Noise Gate", "Attack", "1.00 ms" },
+        { "Crossover", "Split Low", "120 Hz" },
+        { "Crossover", "Split High", "600 Hz" },
+        { "Low Band", "Release", "6.00 ms" },
+        { "Mid Band", "Mid Drive", "30.0 %" },
+        { "High Band", "Tight", "100 Hz" },
+        { "EQ", "Peak 2 Freq", "2800 Hz" },
+        { "EQ", "Peak 1 Q", "0.70" },               // no unit declared
+        { "Output", "Ceiling", "0.00 dBFS" },
+    };
+
+    for (const auto& expectation : expectations)
+    {
+        auto* panel = findDescendantByTitle<basilica::gui::BusPanel> (editor, expectation.panel);
+        REQUIRE (panel != nullptr);
+
+        auto* knob = findDescendantByTitle<juce::Slider> (*panel, expectation.label);
+        REQUIRE (knob != nullptr);
+
+        INFO ("knob \"" << expectation.panel << " / " << expectation.label
+              << "\" shows \"" << knob->getTextFromValue (knob->getValue()).toStdString() << "\"");
+        CHECK (knob->getTextFromValue (knob->getValue()) == juce::String (expectation.expectedText));
+    }
+}
+
+TEST_CASE ("No knob ever displays more than two decimal places", "[gui][a11y]")
+{
+    CryptaAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 512);
+    CryptaAudioProcessorEditor editor (processor);
+
+    int knobsChecked = 0;
+
+    visitDescendants<juce::Slider> (editor, [&] (juce::Slider& knob)
+    {
+        // Sample each knob across its whole range, not just at its default:
+        // a formatting rule that only holds at the default value is not a
+        // formatting rule.
+        const auto range = knob.getRange();
+
+        for (double proportion = 0.0; proportion <= 1.0; proportion += 0.1)
+        {
+            const auto value = range.getStart() + proportion * range.getLength();
+            const auto text = knob.getTextFromValue (value);
+
+            INFO ("knob \"" << knob.getTitle().toStdString() << "\" at " << value
+                  << " shows \"" << text.toStdString() << "\"");
+
+            // Never an ellipsised, over-long number...
+            CHECK_FALSE (text.contains ("..."));
+
+            // The leading numeric run, whatever unit follows it ("10.0 ms",
+            // "10.0:1", "0.70").
+            const auto numberPart = text.initialSectionContainingOnly ("-0123456789.");
+            const auto decimalPart = numberPart.fromFirstOccurrenceOf (".", false, false);
+
+            // ...and at most two decimals on anything numeric (choice knobs
+            // render a name and have no decimal point at all).
+            CHECK (decimalPart.length() <= 2);
+        }
+
+        ++knobsChecked;
+    });
+
+    CHECK (knobsChecked == 44);
+}
+
 TEST_CASE ("Choice knobs announce the current choice by NAME, not by index", "[gui][a11y]")
 {
     CryptaAudioProcessor processor;

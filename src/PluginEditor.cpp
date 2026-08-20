@@ -304,15 +304,40 @@ CryptaAudioProcessorEditor::Knob& CryptaAudioProcessorEditor::addKnob (Panel& pa
     {
         // A-02 pattern: unit-carrying parameters declare their unit via
         // .withLabel() in ParameterLayout.cpp (dB/dBFS/ms/Hz/%/:1) - feed
-        // it into both the value box and the accessibility value string.
-        // Choice parameters have an empty label and getText() already
-        // returns the choice NAME, so this is a no-op suffix for them.
-        knob->slider.textFromValueFunction = [param] (double v)
+        // it into both the value box and the accessibility value string, so
+        // a screen reader hears "-60.00 dB" rather than a bare "-60.00".
+        //
+        // Choice parameters keep the parameter's own getText(), which
+        // returns the choice NAME. Continuous ones are formatted here rather
+        // than by getText(): the log-mapped frequency/time ranges are built
+        // from custom NormalisableRange conversion lambdas, and JUCE 8.0.14's
+        // AudioParameterFloat::getText() falls back to full float precision
+        // for those - "119.9999847" in a 74 px value box, truncated with an
+        // ellipsis. Decimals are chosen by magnitude instead.
+        const auto unit = param->getLabel();
+        const auto isChoice = dynamic_cast<const juce::AudioParameterChoice*> (param) != nullptr;
+
+        knob->slider.textFromValueFunction = [param, unit, isChoice] (double value)
         {
-            const auto text = param->getText (param->convertTo0to1 ((float) v), 0);
-            const auto unit = param->getLabel();
-            return unit.isEmpty() ? text : text + " " + unit;
+            if (isChoice)
+                return param->getText (param->convertTo0to1 ((float) value), 0);
+
+            const auto magnitude = std::abs (value);
+            const auto decimals = magnitude >= 100.0 ? 0 : (magnitude >= 10.0 ? 1 : 2);
+
+            auto text = juce::String (value, decimals);
+
+            // "-0.00 dB" is a rounding artefact, not a reading.
+            if (text.startsWithChar ('-') && ! text.containsAnyOf ("123456789"))
+                text = text.substring (1);
+
+            if (unit.isEmpty())
+                return text;
+
+            // Ratio labels read as "10.0:1", every other unit as "10.0 ms".
+            return unit.startsWithChar (':') ? text + unit : text + " " + unit;
         };
+
         knob->slider.updateText();
     }
 

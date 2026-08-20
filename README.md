@@ -90,18 +90,24 @@ palette, master locations and the archived logo drafts are documented in
 [`docs/branding.md`](docs/branding.md). All artwork is self-made and therefore
 license-clean under this repo's AGPLv3.
 
-**Editor.** Crypta currently ships the M2 preset bar and the v0.3.0 metering
-readout above JUCE's generic parameter editor — deliberately plain, so every
-APVTS parameter has a working control while the DSP is still moving. The
-custom LookAndFeel, band-section layout, metering UI and resizable editor are
-the M3 milestone (#45, #25, #26, #27, #28).
+**Editor.** Crypta ships the suite's vector editor: black-and-gold, drawn
+entirely at runtime (no bitmaps), with EB Garamond embedded as the only
+typographic asset. Ten section panels follow the signal flow and carry all 51
+parameters — 44 pointer knobs with engraved scale rings and 7 lamp toggles —
+alongside four needle meters (input/output peak, gate and low-band-compressor
+gain reduction). The window is resizable and aspect-locked between 60 % and
+180 %, and the zoom level is saved with the session. Which control drives
+which parameter is tabulated in [`docs/gui-mapping.md`](docs/gui-mapping.md);
+the component architecture is in
+[`docs/architecture.md`](docs/architecture.md#gui-vector-editor).
 
-**Screenshot.** There is no GUI screenshot in this README yet, and no
-placeholder image standing in for one. Once the M3 editor lands, the rendered
-preview is committed at `docs/gui-preview.png` and linked here, following the
-suite convention: the image is produced by an offscreen snapshot of the real
-editor taken in the GUI test suite, not drawn by hand. See
-[`docs/branding.md`](docs/branding.md#gui-preview) for the exact route.
+**Screenshot.** ![Crypta editor](docs/gui-preview.png)
+
+The preview above is **generated, not mocked up**: the GUI test suite takes an
+offscreen snapshot of the real editor, asserts it is not blank, and writes it
+to `build/gui-preview.png` (`tests/gui/GuiPreviewSnapshotTests.cpp`); that file
+is what is committed as [`docs/gui-preview.png`](docs/gui-preview.png). See
+[`docs/branding.md`](docs/branding.md#gui-preview) for the convention.
 
 ## Installation
 
