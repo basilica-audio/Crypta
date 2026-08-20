@@ -1100,6 +1100,45 @@ void CryptaAudioProcessor::loadImpulseResponse (juce::AudioBuffer<float> irBuffe
     irLoader.loadImpulseResponse (std::move (irBuffer), irSampleRate);
 }
 
+std::vector<cryp::FactoryIRAsset> CryptaAudioProcessor::getFactoryIRAssetTable()
+{
+    // EMPTY, DELIBERATELY (issue #21). Bundling a cab IR means redistributing
+    // someone else's recording inside every copy of this plugin, so the bar is
+    // a licence that is beyond doubt - CC0, an explicit public-domain
+    // dedication, or our own capture (see src/dsp/FactoryIRs.h). Nothing that
+    // clears that bar has been sourced yet, and "free download" is not a
+    // licence. The mechanism around this table is complete and tested; adding
+    // an entry is a content decision plus a BinaryData line in CMakeLists.txt,
+    // not an engineering change.
+    //
+    // Each future entry looks like:
+    //   { "Basilica 4x10 (SM57 cone)", "Self-recorded",
+    //     "Basilica Audio, 2026-xx-xx, Ampeg 4x10 / SM57 / 2 cm off-axis",
+    //     BinaryData::basilica4x10_wav, BinaryData::basilica4x10_wavSize },
+    // and must also be listed in resources/irs/LICENSES.md.
+    return {};
+}
+
+bool CryptaAudioProcessor::loadFactoryImpulseResponse (int index)
+{
+    juce::AudioBuffer<float> irBuffer;
+    double irSampleRate = 0.0;
+
+    // Decode first, install second: a failed decode must leave whatever is
+    // currently loaded playing, not drop the convolution into silence.
+    if (! factoryIRs.decode (index, irBuffer, irSampleRate))
+        return false;
+
+    irLoader.loadImpulseResponse (std::move (irBuffer), irSampleRate);
+    return true;
+}
+
+void CryptaAudioProcessor::clearImpulseResponse()
+{
+    irLoader.clearImpulseResponse();
+}
+
+
 //==============================================================================
 // This creates new instances of the plugin.
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

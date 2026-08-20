@@ -29,6 +29,10 @@ namespace cryp
         // basilica-audio/Nave's std::bad_function_call crash (PR #28).
         const std::lock_guard<std::recursive_mutex> lock (messageThreadMutex);
 
+        // Remembered for clearImpulseResponse(), which has to tag the identity
+        // IR with the same rate this call does.
+        preparedSampleRate = spec.sampleRate;
+
         // Explicitly (re)install a correctly-rate-tagged identity IR *before*
         // convolution.prepare(), per JUCE's own recommendation ("it is
         // recommended to call loadImpulseResponse() before prepare() if a
@@ -64,6 +68,23 @@ namespace cryp
         // Convolution() defaults to Latency{0} (zero added latency by
         // construction), so the dry path never needs compensating delay.
         mixer.setWetLatency (0.0f);
+    }
+
+    void IRLoader::clearImpulseResponse()
+    {
+        const std::lock_guard<std::recursive_mutex> lock (messageThreadMutex);
+
+        // Tagged with the prepared session rate for exactly the reason
+        // prepare() does it (see the class-level comment in IRLoader.h):
+        // Convolution resamples any IR whose stated rate differs from the
+        // session's, and resampling a single-sample impulse smears it.
+        convolution.loadImpulseResponse (makeIdentityImpulseResponse(),
+                                          preparedSampleRate,
+                                          juce::dsp::Convolution::Stereo::yes,
+                                          juce::dsp::Convolution::Trim::no,
+                                          juce::dsp::Convolution::Normalise::no);
+
+        loadedIrTailSeconds = 0.0;
     }
 
     void IRLoader::reset()
