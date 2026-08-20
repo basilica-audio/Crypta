@@ -42,9 +42,10 @@ anchor values rather than re-deriving them.
 ## GUI preview
 
 The suite convention — established by Silentium, which shipped the first
-custom editor — is a single rendered preview at **`docs/gui-preview.png`**,
-referenced from the README and from the CHANGELOG entry of the release that
-introduces the GUI.
+custom editor — is a single rendered preview at **`docs/gui-preview.png`**.
+Silentium references it from the CHANGELOG entry of the release that
+introduced the GUI; Crypta's README additionally reserves the path, so the
+image has one documented home rather than being linked ad hoc.
 
 The preview is **generated, never mocked up**: Silentium's GUI test suite
 takes an offscreen snapshot of the real editor, writes it to
