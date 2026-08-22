@@ -14,6 +14,13 @@ namespace
     // slow enough to avoid zipper noise on parameter automation.
     constexpr double gainRampDurationSeconds = 0.02;
 
+    // Issue #87: fixed, sample-rate-independent crossfade time for the
+    // wet/dry bypass blend (see bypassWetMix's docs in PluginProcessor.h).
+    // 20 ms matches the plugin's existing gain-smoothing ramp: long enough
+    // that the blend itself never reads as a click, short enough that
+    // engaging/disengaging bypass still feels instantaneous to a player.
+    constexpr double bypassCrossfadeDurationSeconds = 0.02;
+
     //==========================================================================
     // v0.1.x -> v0.2.0 structural state migration (docs/design-brief.md's
     // "State migration" guarantee #7): v1 sessions serialize a single
@@ -511,6 +518,18 @@ void CryptaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     circuitAlignDelay.setMaximumDelayInSamples (maxLatencyCompensationSamples);
     circuitAlignDelay.prepare (spec);
 
+    // Issue #87: same contract again for the bypass dry-path delay.
+    bypassDryDelay.setMaximumDelayInSamples (maxLatencyCompensationSamples);
+    bypassDryDelay.prepare (spec);
+
+    // Issue #87: the wet/dry bypass crossfade. Primed to the CURRENT bypass
+    // state (rather than always starting from "wet") so a session saved
+    // while bypassed, or a host that queries the bypass parameter before the
+    // first processBlock(), doesn't open with an audible ramp-in from the
+    // wrong side.
+    bypassWetMix.reset (sampleRate, bypassCrossfadeDurationSeconds);
+    bypassWetMix.setCurrentAndTargetValue (bypassFlag->load (std::memory_order_relaxed) >= 0.5f ? 0.0f : 1.0f);
+
     // Pre-allocate every band/scratch buffer to the promised block size so
     // processBlock() never resizes a buffer on the audio thread, even if a
     // host later sends an oversized block (handled defensively by chunking
@@ -522,6 +541,7 @@ void CryptaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     highBandBuffer.setSize (static_cast<int> (spec.numChannels), preparedBlockSize);
     midHighSumBuffer.setSize (static_cast<int> (spec.numChannels), preparedBlockSize);
     engineCrossfadeBuffer.setSize (static_cast<int> (spec.numChannels), preparedBlockSize);
+    bypassDryBuffer.setSize (static_cast<int> (spec.numChannels), preparedBlockSize);
 
     updateLatencyCompensation();
 }
@@ -565,6 +585,13 @@ void CryptaAudioProcessor::updateLatencyCompensation()
     // keeping all bands time-aligned when they are summed back together in
     // processChunk().
     lowBandLatencyDelay.setDelay (static_cast<float> (totalLatencySamples));
+
+    // Issue #87: the bypass dry path bypasses the whole chain (by definition),
+    // so it needs the same delay applied for the same reason the low band
+    // does above - it must land exactly at the sample the plugin reports as
+    // its own latency, or a host's plugin delay compensation pulls a
+    // bypassed instance's output early relative to the compensated timeline.
+    bypassDryDelay.setDelay (static_cast<float> (totalLatencySamples));
 }
 
 void CryptaAudioProcessor::releaseResources()
@@ -604,6 +631,14 @@ void CryptaAudioProcessor::reset()
     circuitAlignDelay.reset();
     outputClipper.reset();
 
+    // Issue #87: flush the dry delay line's history (a transport rewind must
+    // not replay pre-rewind audio into the bypass blend) and snap the
+    // crossfade to wherever it was heading, cancelling any ramp in flight -
+    // the same "stop cleanly, don't leave stale motion" contract every reset
+    // above already gives its own stage.
+    bypassDryDelay.reset();
+    bypassWetMix.setCurrentAndTargetValue (bypassWetMix.getTargetValue());
+
     meterTaps.reset();
     lowBandMeterLevel = midBandMeterLevel = highBandMeterLevel = 0.0f;
     pendingMidBandLevel = pendingHighBandLevel = 0.0f;
@@ -638,8 +673,16 @@ void CryptaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     for (auto channel = totalNumInputChannels; channel < totalNumOutputChannels; ++channel)
         buffer.clear (channel, 0, buffer.getNumSamples());
 
-    if (bypassFlag->load (std::memory_order_relaxed) >= 0.5f)
-        return;
+    // Issue #87: bypass is a crossfade (bypassWetMix, advanced per-sample in
+    // applyBypassCrossfade()) between the wet chain below - which keeps
+    // running unconditionally, bypassed or not, so none of its state
+    // (filter memory, envelope followers, oversampling FIR history) ever
+    // freezes - and a delayed copy of the untouched input. There is
+    // deliberately no early return here any more: freezing the wet chain
+    // while bypassed is exactly what made re-engaging it click (stale state
+    // resuming into a live signal), which is the second half of what this
+    // issue reports.
+    bypassWetMix.setTargetValue (bypassFlag->load (std::memory_order_relaxed) >= 0.5f ? 0.0f : 1.0f);
 
     // Parameters are read once per host block (not per chunk/sample): the
     // dsp::Gain smoothers and the various stages' own control-rate updates
@@ -742,7 +785,25 @@ void CryptaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     {
         const auto chunkLength = juce::jmin (chunkLimit, fullBlock.getNumSamples() - offset);
         auto chunk = fullBlock.getSubBlock (offset, chunkLength);
+        const auto chunkChannels = chunk.getNumChannels();
+
+        // Issue #87: snapshot the untouched input before processChunk()
+        // mutates `chunk` (i.e. this region of the host's own buffer) in
+        // place with the wet signal.
+        auto dryChunk = juce::dsp::AudioBlock<float> (bypassDryBuffer)
+                             .getSubBlock (0, chunkLength)
+                             .getSubsetChannelBlock (0, chunkChannels);
+        dryChunk.copyFrom (juce::dsp::AudioBlock<const float> (chunk));
+
         processChunk (chunk);
+
+        // Always run: the dry path must stay time-aligned with the wet
+        // chain's latency at every instant, not only while bypass happens to
+        // be engaged, or the delay line's history would be stale the moment
+        // bypass toggles (see bypassDryDelay's docs in PluginProcessor.h).
+        bypassDryDelay.process (juce::dsp::ProcessContextReplacing<float> (dryChunk));
+
+        applyBypassCrossfade (juce::dsp::AudioBlock<const float> (dryChunk), chunk);
     }
 }
 
@@ -1071,6 +1132,31 @@ void CryptaAudioProcessor::applyEngineCrossfade (const juce::dsp::AudioBlock<con
     }
 
     engineCrossfadeRemaining = juce::jmax (0, engineCrossfadeRemaining - static_cast<int> (numSamples));
+}
+
+void CryptaAudioProcessor::applyBypassCrossfade (const juce::dsp::AudioBlock<const float>& dry,
+                                                   juce::dsp::AudioBlock<float>& wet) noexcept
+{
+    // Linear, not equal-power, for the same reason applyEngineCrossfade()
+    // above is linear: the wet and dry signals are two renderings of the
+    // same programme material and are strongly correlated (once dry is
+    // delay-compensated, they are close to identical at bypassCrossfade's
+    // 20ms endpoints), so an equal-power law would produce a measurable
+    // mid-fade level bump rather than a transparent blend.
+    const auto numChannels = wet.getNumChannels();
+    const auto numSamples = wet.getNumSamples();
+
+    for (size_t sample = 0; sample < numSamples; ++sample)
+    {
+        const auto wetGain = bypassWetMix.getNextValue();
+        const auto dryGain = 1.0f - wetGain;
+
+        for (size_t channel = 0; channel < numChannels; ++channel)
+        {
+            auto* wetData = wet.getChannelPointer (channel);
+            wetData[sample] = wetGain * wetData[sample] + dryGain * dry.getChannelPointer (channel)[sample];
+        }
+    }
 }
 
 //==============================================================================

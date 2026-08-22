@@ -121,8 +121,17 @@ TEST_CASE ("Passthrough level test: default parameters leave the signal level un
     CHECK (ratioInDecibels == Catch::Approx (0.0).margin (0.1));
 }
 
-TEST_CASE ("Bypass parameter forces a bit-exact passthrough", "[gain][bypass]")
+TEST_CASE ("Bypass parameter forces a settled, latency-compensated passthrough", "[gain][bypass]")
 {
+    // Issue #87: bypass is a crossfade from wet to dry over a short, fixed
+    // (sample-rate-independent) ramp, with the dry side delayed by the
+    // plugin's own reported latency to stay phase-aligned with the wet
+    // chain it fades from - see PluginProcessor.h's bypassWetMix/
+    // bypassDryDelay docs. "Bit-exact passthrough" therefore now means
+    // "once the ramp has settled, of the time-aligned dry signal" rather
+    // than "instantaneously, of the raw input" - the latter is exactly the
+    // click-and-phase-jump behaviour issue #87 reports, and pinning it here
+    // is what made a real fix look like a regression to this test.
     CryptaAudioProcessor processor;
     processor.prepareToPlay (testSampleRate, testBlockSize);
 
@@ -131,12 +140,19 @@ TEST_CASE ("Bypass parameter forces a bit-exact passthrough", "[gain][bypass]")
     REQUIRE (inputGainParam != nullptr);
     REQUIRE (bypassParam != nullptr);
 
-    // Even with a non-default gain, bypass should make processBlock a
-    // pure passthrough.
+    // Even with a non-default gain, a SETTLED bypass should be a pure
+    // passthrough - the wet chain's own gain staging must not leak into the
+    // dry path at all, at any point in the crossfade.
     inputGainParam->setValueNotifyingHost (inputGainParam->convertTo0to1 (12.0f));
     bypassParam->setValueNotifyingHost (1.0f);
 
+    // Well beyond both the ~20ms crossfade ramp and the dry-delay line's
+    // fill time at every supported sample rate.
     settleSmoothing (processor);
+
+    const auto latency = processor.getLatencySamples();
+    REQUIRE (latency > 0);
+    REQUIRE (latency < testBlockSize); // keeps the single-block check below in range
 
     juce::AudioBuffer<float> reference (2, testBlockSize);
     TestHelpers::fillWithSine (reference, testSampleRate, testFrequencyHz);
@@ -152,7 +168,13 @@ TEST_CASE ("Bypass parameter forces a bit-exact passthrough", "[gain][bypass]")
         const auto* refData = reference.getReadPointer (channel);
         const auto* outData = processed.getReadPointer (channel);
 
-        for (int sample = 0; sample < reference.getNumSamples(); ++sample)
-            CHECK (outData[sample] == Catch::Approx (refData[sample]).margin (1e-6));
+        // Only samples at or beyond `latency` into this block are compared:
+        // settleSmoothing() feeds a phase-zero-restarting sine every call
+        // (see its own docs above), so the delay line's history for the
+        // first `latency` samples of this block is the tail of the
+        // previous (bit-identical, but phase-discontinuous at the block
+        // boundary) settle block, not a delayed copy of `reference` itself.
+        for (int sample = latency; sample < reference.getNumSamples(); ++sample)
+            CHECK (outData[sample] == Catch::Approx (refData[sample - latency]).margin (1e-4));
     }
 }

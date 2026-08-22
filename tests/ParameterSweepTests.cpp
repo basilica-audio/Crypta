@@ -155,15 +155,6 @@ namespace
     // that it does not get worse. Removing an entry is how one of these gets
     // fixed; raising a number needs a reason.
     //
-    //   bypass        an unsmoothed hard passthrough (PluginProcessor.cpp
-    //                 returns early), so engaging it steps by whatever the wet
-    //                 and dry signals differ by at that instant, and the dry
-    //                 path is also returned undelayed while the plugin reports
-    //                 61 samples of latency. Reported as #87 - deliberately
-    //                 NOT changed here, because
-    //                 tests/GainProcessingTests.cpp pins the bit-exact
-    //                 passthrough as intended behaviour and reversing that is
-    //                 the owner's call, not a QA pass's.
     //   gateEnabled   engaging the gate mid-signal is a mode switch, not a
     //                 continuous control; the gate's own attack starts from
     //                 closed.
@@ -171,9 +162,16 @@ namespace
     //                 immediately, so snapping a crossover across its entire
     //                 range in a single block steps the filter state. Standard
     //                 for un-smoothed coefficient updates.
+    //
+    // `bypass` had an entry here (0.85, against a 0.772 measured step) until
+    // issue #87 replaced its unsmoothed early-return with a click-free,
+    // latency-compensated crossfade (see PluginProcessor.h's bypassWetMix/
+    // bypassDryDelay docs and tests/BypassTests.cpp) - it now transitions
+    // within the same 4x-steady-state-slew bound as every un-exempted
+    // parameter (measured ~0.011, against the general bound's ~0.06), so the
+    // exemption is gone rather than merely tightened.
     float knownStepAllowance (const juce::String& id)
     {
-        if (id == "bypass")       return 0.85f;
         if (id == "gateEnabled")  return 0.25f;
         if (id == "splitLowHz")   return 0.10f;
 
