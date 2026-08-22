@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (v1.0.0 QA gate, issue #34)
+
+- **`tests/ParameterSweepTests.cpp` — the end-to-end parameter-extreme sweep** the QA checklist listed as an open automation gap. Walks every `RangedAudioParameter` to both endpoints and asserts the render is finite, bounded by the gain that parameter actually advertises (derived from its own declared range, so `Output Gain` reaching +24 dB is not mistaken for a runaway), and free of transition steps beyond 4x its own steady-state slew. 866 assertions.
+  - **It found three parameters that step rather than ramp**, each now recorded in `knownStepAllowance()` with the measured value so none can get worse without failing the build: `bypass` (0.772 against a 0.015 steady-state slew), `gateEnabled` (0.216), `splitLowHz` (0.085). The other 48 parameters transition within 4x their own slew at both endpoints.
+  - Comparing a transition against its own two endpoints, rather than against an absolute slew limit, is what makes the assertion meaningful on a plugin whose steady-state waveform legitimately contains near-vertical clipping edges.
+- **`tests/CpuLoadTests.cpp` — a CPU cost benchmark** (`[.cpu]`, hidden from the default run, since a wall-clock measurement has no business failing CI on a shared runner). Reports a realtime factor across sample rates 44.1–192 kHz, block sizes 16–2048, and per optional stage.
+  - **It asserts nothing about time**, only that the output stayed finite. The first version asserted a 5x-realtime floor and failed on a machine whose load average happened to be 40 — with 192 kHz measuring *faster* than 88.2 kHz, which is how you know the measurement, not the plugin, was wrong. Each line now prints the machine's load average beside the figure, and if it is not near zero the numbers are worthless. **No uncontended measurement of Crypta's CPU cost exists yet**; this instruments the checklist item rather than answering it.
+
+### Changed
+
+- **`docs/qa-checklist.md` reworked against what is actually enforced.** All four automation gaps it listed are closed — pluginval now validates the AU as well as the VST3, the parameter sweep exists, the offscreen editor snapshot test exists, and the accessibility assertions exist. Every subjective item in Part 2 now carries the closest honest measurement beside it, **explicitly labelled "measured, not heard"**, so the person doing the listening starts from data — not so the listening can be skipped. The two items that cannot be discharged by measurement at all (the installation smoke test, which needs the signed artefact blocked behind #31, and anything requiring a running DAW) are named as such.
+
+### Notes
+
+- **`bypass` is neither click-free nor latency-compensated (#87).** `processBlock()` returns early, so engaging bypass steps by whatever the wet and dry signals differ by at that instant, and the dry path is returned undelayed while the plugin reports 61 samples of latency — meaning a bypassed instance does not null against a dry track under host PDC. Deliberately **not** fixed here: `tests/GainProcessingTests.cpp` pins the bit-exact passthrough as intended behaviour by name, and changing what bypass means is a product decision, not a QA one.
+
 ### Added (headline: four bundled cabinet IRs, generated rather than sourced)
 
 - **Four bass cabinet impulse responses, bundled via `BinaryData`** — `Modelled 8x10 Cone`, `Modelled 8x10 Edge`, `Modelled 1x15 Vintage`, `Modelled 4x10 Horn` (`resources/irs/`, issue #81). `CryptaAudioProcessor::getFactoryIRAssetTable()` is no longer empty; the slot mechanics shipped in v0.4.0 now have content behind them.
