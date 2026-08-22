@@ -135,6 +135,67 @@ today. "Developer ID Installer" is a separate Apple certificate type from the
 not give you the other. When `APPLE_INSTALLER_CERT_P12` is absent the step logs
 a notice and exits 0, leaving the signed/notarized zip untouched. See issue #31.
 
+#### Signing order
+
+`--deep` is never used anywhere in this pipeline — it lets `codesign`
+silently re-sign whatever it finds nested inside a bundle in one pass,
+which papers over exactly the ordering bugs this note exists to avoid.
+Crypta's bundles (`.component`, `.vst3`, `.app`) are flat: a single Mach-O
+binary under `Contents/MacOS`, no embedded frameworks or helper tools, so
+there is no nested code that needs its own signing pass before the bundle
+itself. The order that matters is between artefact kinds, and the workflow
+already applies it correctly:
+
+1. **Sign each of the three bundles directly** with the Developer ID
+   Application identity (`codesign --force --options runtime --timestamp
+   --sign "$IDENTITY"`), one call per bundle — this *is* "inner before
+   outer" for a flat bundle, since the bundle is both the innermost and
+   outermost signable unit.
+2. **Notarize and staple those bundles** (`notarytool submit --wait`, then
+   `stapler staple`) before they go into the `.pkg` payload — so the AU,
+   VST3 and standalone app carry their own valid Gatekeeper tickets
+   independently of the installer that delivers them.
+3. **Build the component packages** (`pkgbuild`) from the already-signed,
+   notarized, stapled bundles. Component packages are not themselves
+   code-signed — that is not a gap, it is how Apple's flat-package format
+   works: `pkgbuild` component output is inert payload, and Installer.app
+   only checks the signature on the top-level product package it opens.
+4. **Assemble the distribution product** (`productbuild --distribution`)
+   from the component packages.
+5. **Sign the whole product package once**, at the outermost level
+   (`productsign --sign "$INSTALLER_IDENTITY"`) — the *only* signature a
+   `.pkg` needs or gets.
+6. **Notarize and staple the signed `.pkg`** as its own submission,
+   separate from the bundle notarization in step 2.
+
+So for the bundles the rule is "sign each flat bundle once, notarize and
+staple it before it is copied anywhere else"; for the `.pkg` the rule is
+"never sign the component packages, sign only the final product package,
+after assembly, before its own separate notarization pass."
+
+#### Verifying an artefact
+
+[`.github/scripts/verify-macos-signing.sh`](../.github/scripts/verify-macos-signing.sh)
+checks all three Gatekeeper gates independently against any built artefact
+(a `.component`/`.vst3`/`.app` bundle, or a `.pkg`):
+
+```sh
+.github/scripts/verify-macos-signing.sh path/to/Crypta.component path/to/Crypta.vst3 path/to/Crypta.app
+.github/scripts/verify-macos-signing.sh path/to/crypta-vX.Y.Z-macos.pkg
+```
+
+It reports each gate — `codesign --verify --strict --verbose=4` (or
+`pkgutil --check-signature` for a `.pkg`), `spctl --assess`, and
+`xcrun stapler validate` — separately, so an artefact that fails can be
+diagnosed at the exact gate it fails: an unsigned bundle fails all three
+for "unsigned" reasons; a bundle signed with a real Developer ID but not
+yet notarized passes `codesign` and fails `spctl`/`stapler` with
+"Unnotarized Developer ID"; a fully signed, notarized, stapled artefact
+passes all three. `release.yml` runs it on the bundles right after
+stapling them, and again on the `.pkg` right after stapling it, so a
+regression in any gate fails the release job instead of shipping a
+Gatekeeper-blocked artefact.
+
 ### Windows signing
 
 Windows binaries ship unsigned; users get a SmartScreen warning on first run.

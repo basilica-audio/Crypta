@@ -160,6 +160,10 @@ jobs:
           for B in stage/AU/*.component stage/VST3/*.vst3 stage/Standalone/*.app; do
             xcrun stapler staple "$B"
           done
+          # Issue #31: assert all three gates (codesign --verify --strict,
+          # spctl --assess, stapler validate) rather than trusting that a
+          # zero exit from staple alone means the artefact is Gatekeeper-clean.
+          .github/scripts/verify-macos-signing.sh stage/AU/*.component stage/VST3/*.vst3 stage/Standalone/*.app
           SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           ditto -c -k --norsrc --noextattr --noqtn --noacl stage "$SLUG-$GITHUB_REF_NAME-macos.zip"
           echo "ASSET=$SLUG-$GITHUB_REF_NAME-macos.zip" >> "$GITHUB_ENV"
@@ -244,7 +248,10 @@ jobs:
             --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$API_KEY_ID" --issuer "$API_ISSUER_ID" \
             --wait --timeout 30m
           xcrun stapler staple "$PKG"
-          xcrun stapler validate "$PKG"
+          # Issue #31: same three-gate assertion as the bundles above
+          # (pkgutil --check-signature in place of codesign for a .pkg,
+          # since it is a flat installer archive rather than Mach-O code).
+          .github/scripts/verify-macos-signing.sh "$PKG"
           echo "PKG_ASSET=$PKG" >> "$GITHUB_ENV"
 
       - name: Delete throwaway keychain
