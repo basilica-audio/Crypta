@@ -95,14 +95,21 @@ public:
     void loadImpulseResponse (juce::AudioBuffer<float> irBuffer, double irSampleRate);
 
     //==============================================================================
-    // Factory IR slots (issue #21). The mechanism is complete and tested; the
-    // asset table it reads is EMPTY, because no impulse response has been
-    // sourced with a licence this project will stake a distributed binary on -
-    // see src/dsp/FactoryIRs.h for the licence bar and the follow-up issue.
+    // Factory IR slots (issues #21/#81). Four bass cabinet impulse responses
+    // are bundled, and all four are GENERATED rather than recorded: they are
+    // computed by tools/ir-synth/cabsynth.py from a documented analytical
+    // cabinet model, so no third-party recording is redistributed inside the
+    // binary and there is no provenance to trace. See
+    // resources/irs/LICENSES.md for the per-model parameters, checksums and
+    // measured responses, and src/dsp/FactoryIRs.h for the licence bar the
+    // table is checked against.
+    //
+    // They are MODELS, not captures, and every display name says "Modelled"
+    // for that reason. Nothing here may be presented as a recording of a real
+    // cabinet.
+    //
     // A GUI IR slot list is expected to render getNumFactoryImpulseResponses()
-    // entries plus a "None" entry wired to clearImpulseResponse(); with the
-    // table empty that list contains only "None", which is exactly the current
-    // (safe, passthrough) behaviour.
+    // entries plus a "None" entry wired to clearImpulseResponse().
     //
     // All three are message-thread only.
     // The raw asset table the library is built from. Public and static so the
@@ -278,7 +285,8 @@ private:
     cryp::BandEQ eq;
     cryp::IRLoader irLoader;
 
-    // Issue #21's asset table. Empty as shipped - see getFactoryIRAssetTable().
+    // Issue #21/#81's asset table - four generated bass cabinet models, see
+    // getFactoryIRAssetTable() and resources/irs/LICENSES.md.
     cryp::FactoryIRLibrary factoryIRs { getFactoryIRAssetTable() };
 
     // v0.3.0 safety clip: ADAA ceiling clip in delta form, replacing the raw
