@@ -21,6 +21,7 @@ jobs:
   create-release:
     name: Create release
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -68,6 +69,7 @@ jobs:
     name: Signed macOS release
     needs: create-release
     runs-on: macos-14
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -119,6 +121,7 @@ jobs:
           echo "KEYCHAIN=$KC" >> "$GITHUB_ENV"
 
       - name: Sign, notarize, staple, package
+        timeout-minutes: 40
         env:
           API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
           API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
@@ -170,6 +173,7 @@ jobs:
           echo "SLUG=$SLUG" >> "$GITHUB_ENV"
 
       - name: Build signed .pkg installer
+        timeout-minutes: 40
         # Issue #31. The bundles in stage/ are already signed, notarized and
         # stapled by the previous step; this wraps them in a distribution
         # installer that drops each format in its canonical location.
@@ -276,6 +280,7 @@ jobs:
     name: Windows release (unsigned)
     needs: create-release
     runs-on: windows-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Set CPM source cache path
