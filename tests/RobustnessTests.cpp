@@ -272,6 +272,57 @@ TEST_CASE ("T16: switching engines mid-stream does not allocate", "[robustness][
     CHECK (allocations < 40);
 }
 
+TEST_CASE ("T16: toggling bypass mid-stream does not allocate", "[robustness][realtime][bypass]")
+{
+    // Issue #87: bypass is now a crossfade against a delayed dry copy
+    // (bypassWetMix/bypassDryDelay - see PluginProcessor.h), running an
+    // extra snapshot-delay-blend path in processBlock() on every single
+    // block, not only while bypass happens to be engaged. That is new code
+    // on the audio thread's hottest path, and exactly the kind of change
+    // that is an easy place to accidentally allocate (a fresh
+    // juce::dsp::AudioBlock is cheap, but a re-sized juce::AudioBuffer is
+    // not, and this fix touches both).
+    CryptaAudioProcessor processor;
+    prepareForRealtimeTest (processor, 1);
+
+    juce::AudioBuffer<float> buffer (2, rtBlockSize);
+    juce::MidiBuffer midi;
+
+    for (int block = 0; block < 8; ++block)
+    {
+        fillBlock (buffer, 110.0, block * rtBlockSize, 0.5f);
+        processor.processBlock (buffer, midi);
+    }
+
+    auto* bypassParameter = processor.apvts.getParameter (ParamIDs::bypass);
+    REQUIRE (bypassParameter != nullptr);
+
+    const auto allocations = AllocationCounter::countDuring ([&]
+    {
+        for (int block = 0; block < 40; ++block)
+        {
+            // Same convention as the engine-switch test above: the
+            // message-thread parameter write happens between blocks, so
+            // only processBlock()'s own reaction is measured.
+            bypassParameter->setValueNotifyingHost (block % 2 == 0 ? 1.0f : 0.0f);
+
+            fillBlock (buffer, 110.0, block * rtBlockSize, 0.5f);
+            processor.processBlock (buffer, midi);
+        }
+    });
+
+    INFO (allocations << " allocations across 40 bypass toggles");
+    CHECK (TestHelpers::allSamplesFinite (buffer));
+
+    // Same loose bound as "T16: switching engines mid-stream does not
+    // allocate" above, and for the same reason: setValueNotifyingHost()
+    // itself is allowed to allocate (it is a message-thread call in
+    // production), so this bound is about processBlock(), not about
+    // whether a JUCE listener-list detail makes the count exactly zero.
+    // Measured as zero in practice.
+    CHECK (allocations < 40);
+}
+
 TEST_CASE ("T16: a long silence after a loud burst does not inflate block time", "[robustness][realtime]")
 {
     // Denormal guard. Filter state decaying towards zero produces denormals,

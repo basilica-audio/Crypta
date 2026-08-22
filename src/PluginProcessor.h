@@ -198,6 +198,15 @@ private:
                                 const juce::dsp::AudioBlock<const float>& incoming,
                                 juce::dsp::AudioBlock<float>& destination) noexcept;
 
+    // Issue #87: click-free, latency-compensated bypass. Blends `wet` (the
+    // chunk processChunk() just produced, in place in the host's own buffer)
+    // towards `dry` (a delayed copy of the untouched input - see
+    // bypassDryDelay's docs below) using bypassWetMix, advancing it one
+    // SmoothedValue step per sample. `wet` is both an input and the
+    // destination.
+    void applyBypassCrossfade (const juce::dsp::AudioBlock<const float>& dry,
+                                juce::dsp::AudioBlock<float>& wet) noexcept;
+
     // Writes the block's metering values into meterTaps. Block-rate only -
     // nothing here touches the per-sample path.
     void publishMeterTaps (const juce::dsp::AudioBlock<float>& output,
@@ -268,6 +277,16 @@ private:
     int engineCrossfadeRemaining = 0;
     bool lastDriveEngineWasCircuit = true;
 
+    // Issue #87: bypass is a continuous crossfade between the wet chain's
+    // output and the time-aligned dry signal (bypassDryDelay above), driven
+    // by this SmoothedValue rather than a hard branch. A fixed TIME constant
+    // (not a fixed sample count, unlike engineCrossfadeLengthSamples above -
+    // sample-rate independence matters here because a bypass toggle is a
+    // performance-time event a player reacts to, not an internal engine
+    // swap) - see bypassCrossfadeDurationSeconds. 1 = fully wet, 0 = fully
+    // bypassed (dry).
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> bypassWetMix;
+
     // Scratch for the crossfade's second engine render. Sized with the other
     // band buffers in prepareToPlay().
     juce::AudioBuffer<float> engineCrossfadeBuffer;
@@ -322,6 +341,15 @@ private:
     // fractionally modulated delay.
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> lowBandLatencyDelay { maxLatencyCompensationSamples };
 
+    // Issue #87: delays a copy of the untouched input by the plugin's own
+    // reported latency, so the bypassed ("dry") signal stays phase-aligned
+    // with the wet chain - amplitude-blending two signals that are not
+    // time-aligned would comb-filter rather than null, which is its own kind
+    // of audible discontinuity at the bypass boundary. Always kept running
+    // (see processBlock()), exactly like lowBandLatencyDelay below, so its
+    // history is never stale when bypass toggles.
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> bypassDryDelay { maxLatencyCompensationSamples };
+
     // Pads the Circuit engine's output up to the Classic engine's latency.
     //
     // The two engines can report different latencies: Classic is always 4x
@@ -345,6 +373,12 @@ private:
     juce::AudioBuffer<float> midBandBuffer;
     juce::AudioBuffer<float> highBandBuffer;
     juce::AudioBuffer<float> midHighSumBuffer;
+
+    // Issue #87: holds the untouched input for the current chunk (captured
+    // before processChunk() mutates its argument in place) and then, after
+    // bypassDryDelay.process() runs on it, the time-aligned dry signal
+    // applyBypassCrossfade() blends against the wet output.
+    juce::AudioBuffer<float> bypassDryBuffer;
     int preparedBlockSize = 0;
 
     // See setLowBandIsolationCaptureForTests() above. Null in production.
