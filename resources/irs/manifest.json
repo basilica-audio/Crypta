@@ -1,0 +1,177 @@
+{
+  "generator": "cabsynth.py",
+  "generator_sha256": "d97b4797852f82f090ec307ec355cbc2197c6861be98600c66c60cf476fff003",
+  "irs": [
+    {
+      "bit_depth": 24,
+      "channels": 1,
+      "description": "Sealed 8x10 bass stack, generic cardioid dynamic on the dust cap at 2 cm.",
+      "display_name": "Modelled 8x10 Cone",
+      "family": "bass",
+      "file": "modelled_8x10_cone.wav",
+      "id": "bass-810-cone",
+      "length_ms": 85.33,
+      "length_samples": 4096,
+      "normalisation_scale": 0.5196795430132171,
+      "peak_sample": 0.12044,
+      "pre_normalisation_peak_response": 1.9242627758671786,
+      "reflections": [
+        {
+          "delay_samples": 36,
+          "gain": -0.2,
+          "path_cm": 26.0
+        },
+        {
+          "delay_samples": 77,
+          "gain": 0.12,
+          "path_cm": 55.0
+        }
+      ],
+      "sample_rate": 48000,
+      "sections": [
+        "driver: highpass 55.0 Hz Q 1.15",
+        "driver: peak 80.0 Hz Q 1.20 +2.5 dB",
+        "driver: peak 300.0 Hz Q 1.00 -2.5 dB",
+        "driver: peak 700.0 Hz Q 1.40 +3.0 dB",
+        "driver: peak 1500.0 Hz Q 2.50 +4.0 dB",
+        "driver: peak 2600.0 Hz Q 3.50 -4.0 dB",
+        "driver: peak 3400.0 Hz Q 3.00 +2.5 dB",
+        "driver: lowpass 4000.0 Hz Q 0.80",
+        "driver: lowpass 5200.0 Hz Q 0.60",
+        "driver: lowshelf 110.0 Hz Q 0.70 +3.0 dB",
+        "driver: peak 5200.0 Hz Q 1.20 +2.5 dB"
+      ],
+      "sha256": "67aa93d0e238e88b74b455c3b5322d455d61c007620ace2d2cb88b54c6a793e2",
+      "tail": null
+    },
+    {
+      "bit_depth": 24,
+      "channels": 1,
+      "description": "The same sealed 8x10, microphone moved to the cone edge and angled off-axis.",
+      "display_name": "Modelled 8x10 Edge",
+      "family": "bass",
+      "file": "modelled_8x10_edge.wav",
+      "id": "bass-810-edge",
+      "length_ms": 85.33,
+      "length_samples": 4096,
+      "normalisation_scale": 0.531751151424799,
+      "peak_sample": 0.071187,
+      "pre_normalisation_peak_response": 1.8805789086127094,
+      "reflections": [
+        {
+          "delay_samples": 43,
+          "gain": -0.17,
+          "path_cm": 31.0
+        },
+        {
+          "delay_samples": 77,
+          "gain": 0.12,
+          "path_cm": 55.0
+        }
+      ],
+      "sample_rate": 48000,
+      "sections": [
+        "driver: highpass 55.0 Hz Q 1.15",
+        "driver: peak 80.0 Hz Q 1.20 +2.5 dB",
+        "driver: peak 300.0 Hz Q 1.00 -2.5 dB",
+        "driver: peak 700.0 Hz Q 1.40 +3.0 dB",
+        "driver: peak 1500.0 Hz Q 2.50 +4.0 dB",
+        "driver: peak 2600.0 Hz Q 3.50 -4.0 dB",
+        "driver: peak 3400.0 Hz Q 3.00 +2.5 dB",
+        "driver: lowpass 4000.0 Hz Q 0.80",
+        "driver: lowpass 5200.0 Hz Q 0.60",
+        "driver: peak 220.0 Hz Q 1.00 +2.0 dB",
+        "driver: highshelf 2500.0 Hz Q 0.70 -6.0 dB",
+        "driver: lowpass 3200.0 Hz Q 0.70",
+        "driver: lowshelf 110.0 Hz Q 0.70 +2.0 dB",
+        "driver: peak 5200.0 Hz Q 1.20 +1.0 dB"
+      ],
+      "sha256": "551d27888c679e864342d70a76c0298a8dbbaf21cb33b81ed995f387bf63a1c3",
+      "tail": null
+    },
+    {
+      "bit_depth": 24,
+      "channels": 1,
+      "description": "Ported 1x15, dark vintage voicing, generic ribbon microphone at 5 cm.",
+      "display_name": "Modelled 1x15 Vintage",
+      "family": "bass",
+      "file": "modelled_1x15_vintage.wav",
+      "id": "bass-115-vintage",
+      "length_ms": 85.33,
+      "length_samples": 4096,
+      "normalisation_scale": 0.39589620917922186,
+      "peak_sample": 0.047483,
+      "pre_normalisation_peak_response": 2.5259145624890307,
+      "reflections": [
+        {
+          "delay_samples": 42,
+          "gain": -0.18,
+          "path_cm": 30.0
+        }
+      ],
+      "sample_rate": 48000,
+      "sections": [
+        "driver: highpass 48.0 Hz Q 0.90",
+        "driver: highpass 44.0 Hz Q 1.40",
+        "driver: peak 70.0 Hz Q 1.40 +3.5 dB",
+        "driver: peak 260.0 Hz Q 1.10 -3.0 dB",
+        "driver: peak 550.0 Hz Q 1.20 +2.0 dB",
+        "driver: peak 1200.0 Hz Q 2.00 +2.5 dB",
+        "driver: peak 2200.0 Hz Q 3.00 -5.0 dB",
+        "driver: lowpass 2800.0 Hz Q 0.85",
+        "driver: lowpass 3600.0 Hz Q 0.60",
+        "driver: lowshelf 100.0 Hz Q 0.70 +4.0 dB",
+        "driver: highshelf 4000.0 Hz Q 0.70 -4.0 dB"
+      ],
+      "sha256": "fd7de6a4fbe4e1fe6a820b657a2dc5e6693db74236ef668c23374d7eee8182e4",
+      "tail": null
+    },
+    {
+      "bit_depth": 24,
+      "channels": 1,
+      "description": "Ported 4x10 with an HF horn on a passive crossover - the modern, extended-top bass voicing.",
+      "display_name": "Modelled 4x10 Horn",
+      "family": "bass",
+      "file": "modelled_4x10_horn.wav",
+      "id": "bass-410-horn",
+      "length_ms": 85.33,
+      "length_samples": 4096,
+      "normalisation_scale": 0.4872153699706963,
+      "peak_sample": 0.099379,
+      "pre_normalisation_peak_response": 2.052480405246955,
+      "reflections": [
+        {
+          "delay_samples": 34,
+          "gain": -0.16,
+          "path_cm": 24.0
+        },
+        {
+          "delay_samples": 81,
+          "gain": 0.1,
+          "path_cm": 58.0
+        }
+      ],
+      "sample_rate": 48000,
+      "sections": [
+        "woofers: highpass 52.0 Hz Q 0.85",
+        "woofers: highpass 46.0 Hz Q 1.30",
+        "woofers: peak 75.0 Hz Q 1.30 +3.0 dB",
+        "woofers: peak 320.0 Hz Q 1.00 -2.0 dB",
+        "woofers: peak 900.0 Hz Q 1.30 +2.5 dB",
+        "woofers: peak 1800.0 Hz Q 2.50 +3.0 dB",
+        "woofers: lowpass 3000.0 Hz Q 0.70",
+        "woofers: lowpass 3200.0 Hz Q 0.70",
+        "woofers: lowshelf 120.0 Hz Q 0.70 +2.0 dB",
+        "horn: highpass 3600.0 Hz Q 0.80",
+        "horn: highpass 3400.0 Hz Q 0.70",
+        "horn: peak 5500.0 Hz Q 2.00 +3.0 dB",
+        "horn: peak 8000.0 Hz Q 3.00 -4.0 dB",
+        "horn: lowpass 12000.0 Hz Q 0.70"
+      ],
+      "sha256": "b7e98317d45a340cff6853392a1fde3bcf4f446a6a7e5f7a0336dabeca1537f4",
+      "tail": null
+    }
+  ],
+  "normalisation": "unity peak magnitude response (max |H(f)| = 1.0)",
+  "speed_of_sound_m_per_s": 343.0
+}

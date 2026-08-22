@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added (v1.0.0 QA gate, issue #34)
+
+- **`tests/ParameterSweepTests.cpp` — the end-to-end parameter-extreme sweep** the QA checklist listed as an open automation gap. Walks every `RangedAudioParameter` to both endpoints and asserts the render is finite, bounded by the gain that parameter actually advertises (derived from its own declared range, so `Output Gain` reaching +24 dB is not mistaken for a runaway), and free of transition steps beyond 4x its own steady-state slew. 866 assertions.
+  - **It found three parameters that step rather than ramp**, each now recorded in `knownStepAllowance()` with the measured value so none can get worse without failing the build: `bypass` (0.772 against a 0.015 steady-state slew), `gateEnabled` (0.216), `splitLowHz` (0.085). The other 48 parameters transition within 4x their own slew at both endpoints.
+  - Comparing a transition against its own two endpoints, rather than against an absolute slew limit, is what makes the assertion meaningful on a plugin whose steady-state waveform legitimately contains near-vertical clipping edges.
+- **`tests/CpuLoadTests.cpp` — a CPU cost benchmark** (`[.cpu]`, hidden from the default run, since a wall-clock measurement has no business failing CI on a shared runner). Reports a realtime factor across sample rates 44.1–192 kHz, block sizes 16–2048, and per optional stage.
+  - **It asserts nothing about time**, only that the output stayed finite. The first version asserted a 5x-realtime floor and failed on a machine whose load average happened to be 40 — with 192 kHz measuring *faster* than 88.2 kHz, which is how you know the measurement, not the plugin, was wrong. Each line now prints the machine's load average beside the figure, and if it is not near zero the numbers are worthless. **No uncontended measurement of Crypta's CPU cost exists yet**; this instruments the checklist item rather than answering it.
+
+### Changed
+
+- **`docs/qa-checklist.md` reworked against what is actually enforced.** All four automation gaps it listed are closed — pluginval now validates the AU as well as the VST3, the parameter sweep exists, the offscreen editor snapshot test exists, and the accessibility assertions exist. Every subjective item in Part 2 now carries the closest honest measurement beside it, **explicitly labelled "measured, not heard"**, so the person doing the listening starts from data — not so the listening can be skipped. The two items that cannot be discharged by measurement at all (the installation smoke test, which needs the signed artefact blocked behind #31, and anything requiring a running DAW) are named as such.
+
+### Notes
+
+- **`bypass` is neither click-free nor latency-compensated (#87).** `processBlock()` returns early, so engaging bypass steps by whatever the wet and dry signals differ by at that instant, and the dry path is returned undelayed while the plugin reports 61 samples of latency — meaning a bypassed instance does not null against a dry track under host PDC. Deliberately **not** fixed here: `tests/GainProcessingTests.cpp` pins the bit-exact passthrough as intended behaviour by name, and changing what bypass means is a product decision, not a QA one.
+
+### Added (headline: four bundled cabinet IRs, generated rather than sourced)
+
+- **Four bass cabinet impulse responses, bundled via `BinaryData`** — `Modelled 8x10 Cone`, `Modelled 8x10 Edge`, `Modelled 1x15 Vintage`, `Modelled 4x10 Horn` (`resources/irs/`, issue #81). `CryptaAudioProcessor::getFactoryIRAssetTable()` is no longer empty; the slot mechanics shipped in v0.4.0 now have content behind them.
+
+  **They are models, not captures, and the naming says so.** Nothing bundled is a recording of any cabinet, speaker or microphone, and none is named after one. Each is computed by `tools/ir-synth/cabsynth.py` from a documented analytical model — driver/box alignment, cone-breakup modes, voice-coil-inductance roll-off, baffle and floor reflections at physical path lengths, microphone proximity and directivity — and every display name begins with "Modelled". `tests/FactoryIRTests.cpp` asserts that prefix rather than leaving it to review.
+
+  **Generating them is the licensing answer.** The content half of #21 stalled because bundling a cab IR means redistributing someone else's recording inside every copy of an AGPLv3 binary, a capture carries rights from the cabinet, the microphone and whoever pressed record, and "free download" is not a licence. Sourcing one that is beyond doubt is a research project with an uncertain outcome. A generated IR removes the question instead of answering it: there is no third-party recording in the binary, so there is nothing to trace and no licensor to find. The generator ships with the audio — re-run it, get byte-identical output, compare the SHA-256 in `resources/irs/manifest.json`. Reproducibility is the provenance. Filed under `CC0-1.0` rather than `Self-recorded`, because `Self-recorded` means a capture and these are not captures; the CC0 1.0 legal code is committed at `resources/irs/CC0-1.0.txt`. No attribution is required of anybody.
+
+- **`tools/ir-synth/` — the generator and the verifier** (`cabsynth.py`, `verify_irs.py`, `README.md`). Standard-library Python 3 only: no numpy, no network access, deliberately, because a generator that needs a pinned scientific stack to reproduce its output is a weaker reproducibility claim than one that needs nothing. `verify_irs.py` measures the shipped `.wav` files as signals and now gates CI.
+
+- **Measured verification of every bundled asset, in the test suite and in CI.** `tests/FactoryIRTests.cpp` gains six cases that re-measure the bytes `BinaryData` actually embedded — the copy that ships — rather than trusting the files that produced them: documented format (mono, 48 kHz, 4096 taps), no clipped or non-finite sample, DC offset below 1e-4 and `|H(0)|` at least 60 dB under the response peak (measured −69 dB to −114 dB), `max |H(f)|` at 0 dBFS within 0.1 dB, a tail that has faded to digital silence rather than been cut off, under 0.01 % of energy in the final tenth, and — the check the issue turns on — **each of the four slots loading into the convolution engine and audibly changing the signal, with "None" restoring the bit-exact passthrough.** A seventh case pins that the four voicings are measurably different from one another, which every other test would happily pass if they were not.
+
+### Changed
+
+- `resources/irs/LICENSES.md` rewritten from "no impulse response is bundled" to the full provenance record: per-file model parameters, licence, checksums and measured response (peak, RMS, DC, −10 dB band, decay time, octave-band table).
+- `resources/irs/manifest.json` is the machine-readable half of that record, and `verify_irs.py --expect-manifest` cross-checks every file's SHA-256 against it in CI, so the documentation cannot drift away from the audio it describes.
+- The v0.4.0 documentation test asserting the asset table is *empty* is replaced by its counterpart: the table is populated, with these four names in this order, and out-of-range indices still refuse cleanly.
+
+### Notes
+
+- **The bundled IRs have not been listened to.** They are verified by measurement — response curves, DC, normalisation, decay, engine load — and labelled as such. Whether they are musically right is issue #81's remaining open question and needs ears.
+- **No GUI IR slot list exists yet.** The four IRs are reachable through the processor API (`getNumFactoryImpulseResponses()`, `getFactoryImpulseResponseName()`, `loadFactoryImpulseResponse()`, `clearImpulseResponse()`) and are exercised end-to-end by the test suite, but the v0.4.0 vector editor exposes only the `Cab` toggle and `Cab Mix` knob — there is no control that lets a user pick one. That is a GUI gap, not a content gap.
+
 ## [0.4.0] - 2026-08-20
 
 ### Added (headline: the custom vector GUI)

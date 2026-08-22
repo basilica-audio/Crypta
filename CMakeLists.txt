@@ -87,6 +87,19 @@ juce_add_binary_data(CryptaBinaryData SOURCES
     # the fully JUCE-drawn editor renders.
     resources/fonts/EBGaramond-Regular.ttf
     resources/fonts/EBGaramond-SemiBold.ttf
+    # Factory cabinet impulse responses (issues #21/#81). Every one of these is
+    # GENERATED, not recorded: tools/ir-synth/cabsynth.py computes them from a
+    # documented analytical cabinet model, so there is no third-party recording
+    # inside the shipped binary and therefore no provenance to trace or dispute.
+    # Licensing, per-file model parameters, checksums and the measured response
+    # of each are in resources/irs/LICENSES.md; the CC0 dedication these are
+    # published under is committed at resources/irs/CC0-1.0.txt. Registered in
+    # CryptaAudioProcessor::getFactoryIRAssetTable(), guarded by the licence bar
+    # in src/dsp/FactoryIRs.cpp and re-measured by tests/FactoryIRTests.cpp.
+    resources/irs/modelled_8x10_cone.wav
+    resources/irs/modelled_8x10_edge.wav
+    resources/irs/modelled_1x15_vintage.wav
+    resources/irs/modelled_4x10_horn.wav
 )
 
 # ==============================================================================
