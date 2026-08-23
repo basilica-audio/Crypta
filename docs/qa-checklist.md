@@ -356,7 +356,7 @@ happened.
 |---|---|
 | Candidate build | |
 | Part 1 green on `main` (commit) | |
-| Machine-verified pass (date, commit) | 2026-08-23 — `scripts/qa-gate.sh` on `372238e` plus this change set, **20 gates run, 0 failed** (see below) |
+| Machine-verified pass (date, commit) | 2026-08-23 — `scripts/qa-gate.sh` on `372238e` plus the change set that added it, **20 gates run, 0 failed**, locally and again on an idle CI runner with bit-identical figures (see below) |
 | Part 2 signed off by | *(not signed — requires listening, a DAW, and a signed artefact from #31)* |
 | Date | |
 
@@ -366,6 +366,15 @@ happened.
 that added this runner, macOS arm64, JUCE 8.0.14, pluginval v1.0.4 at
 `--strictness-level 10`. Twenty gates, none failed. The figures below are what
 the gates printed while passing — not the thresholds they were held to.
+
+**It was run twice, and that is the interesting part.** Once locally on a
+machine carrying other work, and once on a GitHub macOS runner that was idle
+(one-minute load average 1.23 rising to 2.27 on 3 CPUs). Every measured figure
+below is *bit-identical* between the two runs — the same 0.0105713, the same
+−inf dB null, the same alias-to-signal numbers — which is what a deterministic
+render suite ought to produce and is worth having demonstrated rather than
+assumed. Only the durations differ, and durations are the one thing in the
+report that is not a measurement.
 
 | Gate | Result | What it measured |
 |---|---|---|
