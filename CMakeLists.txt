@@ -169,6 +169,12 @@ target_link_libraries(Tests PRIVATE SharedCode Catch2::Catch2)
 target_compile_definitions(Tests PRIVATE
     $<TARGET_PROPERTY:Crypta,COMPILE_DEFINITIONS>
     JUCE_MODAL_LOOPS_PERMITTED=1
+    # tests/QaGateManifestTests.cpp reads scripts/qa-gates.tsv - the QA gate's
+    # declaration of which Catch2 tags make up docs/qa-checklist.md Part 1 -
+    # and asserts every tag in it is still carried by a registered test case.
+    # A repository file has to be located from the test binary to do that, and
+    # the binary's own location moves with the generator and configuration.
+    CRYPTA_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
 set_target_properties(Tests PROPERTIES XCODE_GENERATE_SCHEME ON)

@@ -18,10 +18,58 @@ These run on every pull request and every push to `main`
 Windows, and block the merge. Nothing here needs a human at release time; the
 release is gated on `main` being green.
 
+### Run it
+
+Part 1 is not a list to work through by hand. It is one command:
+
+```
+scripts/qa-gate.sh
+```
+
+It builds every format `juce_add_plugin()` declares, runs every gate below,
+records what each one measured, and exits non-zero if any of them failed. The
+result lands in `build/qa-gate/report.md` (and `report.json`), which is what
+gets pasted into the sign-off table at the bottom of this document — so the
+recorded pass is a run that happened, not a claim that it would.
+
+| | |
+|---|---|
+| Every gate | `scripts/qa-gate.sh` |
+| One gate | `scripts/qa-gate.sh --gates bypass,latency` |
+| Against an existing build | `scripts/qa-gate.sh --skip-build` |
+| Offline (no pluginval download, no AU install) | `scripts/qa-gate.sh --skip-validators` |
+| What the gates are | `scripts/qa-gate.sh --list-gates` |
+
+The Catch2 half of the gate is declared in
+[`scripts/qa-gates.tsv`](../scripts/qa-gates.tsv), one row per gate, and that
+file is the only place a gate is defined. Three properties of the runner are
+worth knowing, because they are what make its green meaningful:
+
+- **A gate whose filter stops matching any test case fails.** Catch2 exits
+  non-zero when nothing matched, so a gate that quietly stopped testing
+  anything can never read as a pass. The mirror image of that — a tag renamed
+  in `tests/` while the manifest is left behind — is caught on *every* pull
+  request by `tests/QaGateManifestTests.cpp`, which asserts the manifest
+  against the test registry rather than waiting for release day to find out.
+- **The shipped formats are read out of `CMakeLists.txt`'s `FORMATS` line**,
+  not restated in the script, so adding a format cannot leave the gate
+  validating a subset of what ships.
+- **pluginval's verdict is not the runner's to decide.** It is delegated to
+  [`.github/scripts/assert-pluginval-passed.sh`](../.github/scripts/assert-pluginval-passed.sh),
+  the same script the workflow uses, at the same pinned version and the same
+  `--strictness-level 10` — so a local run and a CI run cannot disagree about
+  what "passed" means.
+
+In CI the same script runs from
+[`.github/workflows/qa-gate.yml`](../.github/workflows/qa-gate.yml): on demand,
+on a `v*` tag, and on any pull request that touches the gate itself. It is not
+run on every pull request, because it would duplicate `ci.yml`'s build for no
+new signal.
+
 | Check | How it is enforced | Where |
 |---|---|---|
 | Builds on both platforms | `cmake --build`, macOS built as a Universal Binary (arm64 + x86_64) | `ci.yml` matrix |
-| Unit + integration suite | `ctest --output-on-failure`, Catch2 — 187 test cases across 35 files | `tests/` |
+| Unit + integration suite | `ctest --output-on-failure`, Catch2 — 249 test cases across 46 files | `tests/` |
 | pluginval, maximum strictness | `pluginval --strictness-level 10 --validate` on the VST3, pinned to v1.0.4 by SHA-256 | `ci.yml` |
 | AU validation | `auval -strict -v aufx Cryp Yvsv` after installing the built `.component` | `ci.yml` |
 | No allocations on the audio thread | `AllocationGuard` around `processBlock` on both drive engines, across engine switches, oversized blocks and long silences | `tests/RobustnessTests.cpp` (`[realtime]`) |
@@ -33,10 +81,14 @@ release is gated on `main` being green.
 | Preset round-trip and rejection | Save → load restores every parameter; foreign-plugin and wrong-format presets are refused; every factory preset parses, loads and is in range | `tests/PresetManagerTests.cpp` |
 | `reset()` clears stage state | Silence right after a loud signal is actually silent | `tests/ResetTests.cpp` |
 | No zipper noise on fast automation | Automation ramp assertions | `tests/RobustnessTests.cpp` (`[automation]`) |
+| Bypass is click-free | Toggling bypass mid-render steps no further than a small multiple of either endpoint's own steady-state slew, in both directions | `tests/BypassTests.cpp` (`[bypass]`) |
+| Bypass is latency-compensated | A dirac arrives while bypassed at exactly `getLatencySamples()`, and a settled bypassed render nulls against a dry copy shifted by that figure | `tests/BypassTests.cpp` (`[bypass][latency]`) |
+| The wet chain never goes stale while bypassed | A run bypassed for 30 blocks mid-signal converges back to a never-bypassed run to numerical precision | `tests/BypassTests.cpp` (`[bypass]`) |
 | Aliasing budget | Alias-to-signal measurements per voicing and engine | `tests/AliasingTests.cpp` |
 | Latency reporting | Reported latency matches the actual path, and is stable across engine switches | `tests/LatencyTests.cpp` |
 | Cross-thread IR loading | Concurrent `prepare()` / `loadImpulseResponse()` stress | `tests/CrossThreadReprepareTests.cpp` |
 | End-to-end parameter-extreme sweep | Every parameter, at both endpoints: finite, bounded by its own declared range, and no transition step beyond 4x its steady-state slew | `tests/ParameterSweepTests.cpp` (`[sweep]`) |
+| The gate manifest still describes the suite | Every tag in `scripts/qa-gates.tsv` is still carried by a registered test case; every gate id is unique and selectable | `tests/QaGateManifestTests.cpp` (`[qa-gate][meta]`) |
 | Bundled IRs are sane signals | Every factory IR re-measured from the embedded bytes: format, no clipping, DC 60 dB down, unity peak response, faded tail, engine load, voicing spread | `tests/FactoryIRTests.cpp` (`[factory][content]`) |
 | Bundled IRs match their provenance record | SHA-256 of every shipped `.wav` cross-checked against `resources/irs/manifest.json` | `tools/ir-synth/verify_irs.py`, run in `ci.yml` |
 | Release build is signed, notarized, stapled | Developer ID Application signing → `notarytool` → `stapler` on tag push | [`.github/workflows/release.yml`](../.github/workflows/release.yml) |
@@ -65,17 +117,23 @@ that the manual pass should not silently be asked to cover them.
 
 ### What the parameter sweep found
 
-Three parameters step rather than ramp. Each is recorded in
+Three parameters stepped rather than ramped when the sweep was written; two
+still do. Each is recorded in
 `knownStepAllowance()` in `tests/ParameterSweepTests.cpp` with the value measured
 when the test was written, so none of them can get *worse* without failing the
 build:
 
-- **`bypass` — 0.772** (steady-state slew: 0.015). Bypass is an unsmoothed early
-  return, so engaging it steps by whatever the wet and dry signals differ by at
-  that instant, and the dry path is returned undelayed while the plugin reports
-  61 samples of latency. **Filed as #87.** Not fixed here: the bit-exact
-  passthrough is pinned deliberately by `tests/GainProcessingTests.cpp`, and
-  changing what bypass means is a product decision.
+- **`bypass` — 0.772** (steady-state slew: 0.015) when this was written. Bypass
+  was an unsmoothed early return, so engaging it stepped by whatever the wet and
+  dry signals differed by at that instant, and the dry path was returned
+  undelayed while the plugin reported 61 samples of latency. **Filed as #87 and
+  since fixed in PR #90** — bypass is now a crossfade between the
+  continuously-running wet chain and a latency-delayed dry copy. Its
+  `knownStepAllowance()` entry is gone: the sweep holds it to the same 4x bound
+  as everything else, unexempted, and it passes. Measured after the fix:
+  **0.0106 engaging and 0.0124 disengaging, against steady-state slews of 0.0145
+  and 0.0152** — the transition is quieter than the steady state it moves
+  between.
 - **`gateEnabled` — 0.216.** Engaging the gate is a mode switch, not a continuous
   control, and its attack starts from closed.
 - **`splitLowHz` — 0.085.** `juce::dsp::LinkwitzRileyFilter` recomputes
@@ -83,8 +141,9 @@ build:
   single block steps the filter state. Standard for un-smoothed coefficient
   updates.
 
-The other 48 parameters transition within 4x their own steady-state slew at both
-endpoints.
+The suite sweeps **54 parameters** at both endpoints. Two carry an allowance;
+the other 52 — `bypass` now among them — transition within 4x their own
+steady-state slew, unexempted.
 
 ### CPU cost
 
@@ -155,6 +214,12 @@ not marked below:
 - [ ] Plugin appears after an AU rescan; no validation warning in Logic's
       plugin manager.
 - [ ] Insert on a bass track: audio passes, bypass is click-free.
+      *Measured, not heard:* the click-free property is asserted, in both
+      directions, at a tighter bound than "no audible click" — the transition
+      must not step further than 4x either endpoint's own steady-state slew,
+      and measures 0.0106 / 0.0124 against slews of 0.0145 / 0.0152
+      (`tests/BypassTests.cpp`, #87/PR #90). Whether Logic's own bypass button
+      routes through it is the part that needs the DAW.
 - [ ] Automate `Split Low`, `Split High`, `High Drive` and `Voicing` during
       playback — no zipper noise, no dropouts, no clicks on voicing changes.
 - [ ] Save the project, close it, reopen it: every parameter and the loaded
@@ -169,6 +234,13 @@ not marked below:
 - [ ] Same insert, bypass, automation, save/reopen and IR sequence as above.
 - [ ] Plugin delay compensation reports correctly — a null test against a
       dry-copy track cancels when the plugin is in a neutral state.
+      *Measured, not heard:* the plugin's half of this is now proven
+      host-independently. A bypassed instance nulls against a dry copy shifted
+      by `getLatencySamples()` at **−inf dB** — a bit-exact null, not merely a
+      deep one — and a dirac arrives while bypassed at exactly sample 61, the
+      figure the plugin reports (`tests/BypassTests.cpp`). What is left for
+      Reaper is whether the *host* applies that figure, which no test here can
+      answer.
 - [ ] Multiple instances on multiple tracks: no cross-instance interference,
       no CPU cliff.
 
@@ -284,6 +356,63 @@ happened.
 |---|---|
 | Candidate build | |
 | Part 1 green on `main` (commit) | |
-| Machine-verified pass (date, commit) | 2026-08-22 — full suite green, `pluginval --strictness-level 10` SUCCESS on VST3 and AU, `auval -strict` SUCCEEDED |
+| Machine-verified pass (date, commit) | 2026-08-23 — `scripts/qa-gate.sh` on `372238e` plus this change set, **20 gates run, 0 failed** (see below) |
 | Part 2 signed off by | *(not signed — requires listening, a DAW, and a signed artefact from #31)* |
 | Date | |
+
+### The recorded machine-verified pass
+
+`scripts/qa-gate.sh`, on `372238e` (`main` at the time) plus the change set
+that added this runner, macOS arm64, JUCE 8.0.14, pluginval v1.0.4 at
+`--strictness-level 10`. Twenty gates, none failed. The figures below are what
+the gates printed while passing — not the thresholds they were held to.
+
+| Gate | Result | What it measured |
+|---|---|---|
+| `build` | PASS | Configured and built `Release` |
+| `formats` | PASS | AU, VST3, Standalone all present. Architectures: arm64 (a native build; the Universal Binary is CI's `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`) |
+| `standalone-bundle` | PASS | `Info.plist` lints, Mach-O executable present, signature `adhoc` — Developer ID signing is #31 |
+| `irs-manifest` | PASS | 4 shipped `.wav` files re-measured and SHA-256-matched against `resources/irs/manifest.json` |
+| `suite-full` | PASS | 249/249 ctest cases |
+| `bypass` | PASS | 923 assertions. Transition step 0.0106 (engage) / 0.0124 (disengage) against steady-state slews of 0.0145 / 0.0152; dirac at sample 61 against a reported latency of 61; null against a latency-shifted dry copy at **−inf dB**; state-continuity after un-bypass **−inf dB** |
+| `latency` | PASS | 121 assertions. Reported latency 61 samples on both engines at 44.1 / 48 / 96 / 192 kHz. Classic peaks at 61–62; Circuit peaks 15–26 samples later, which is IIR group delay, not a reporting error — see the rationale in `tests/LatencyTests.cpp` |
+| `realtime-safety` | PASS | 15 assertions, no allocation on the audio thread |
+| `param-sweep` | PASS | 1016 assertions over 54 parameters at both endpoints. Largest transition step: 0.231 (`outputGain`), which passes because the bound is 4x *that parameter's own* steady-state slew — a parameter whose endpoint is +24 dB legitimately moves further than one whose endpoint is a filter corner. Only `gateEnabled` (0.216, allowed 0.25) and `splitLowHz` (0.085, allowed 0.10) still need an allowance |
+| `state-recall` | PASS | 25239 assertions across 42 cases |
+| `rate-and-block` | PASS | 48883 assertions across 40 cases |
+| `null-tests` | PASS | 113 assertions. Golden render null at **−200 dB** relative to the golden; engaged safety clip null at −19.1 dB against a 7.4 dB signal, inside its documented budget |
+| `aliasing` | PASS | 100 assertions. Alias-to-signal −95.9 dB on the reference tone; Circuit vs. Classic at 1244 Hz: −81.9 dB vs. −48.0 dB; ADAA-1 improves a plain `tanh` by 12.3 dB (−17.1 → −29.3) and the delta-form by 13.6 dB (−55.7 → −69.3) |
+| `voicing-measured` | PASS | 86824 assertions across 39 cases — measured, **not heard** (see Part 2) |
+| `content` | PASS | 6757 assertions across 25 cases |
+| `editor` | PASS | 4189 assertions across 47 cases |
+| `manifest` | PASS | 208 assertions — every tag in `scripts/qa-gates.tsv` is still carried by a registered test case, and every gate id is unique |
+| `pluginval-vst3` | PASS | `--strictness-level 10`, 1 plugin found, SUCCESS, exit 0 |
+| `pluginval-au` | PASS | `--strictness-level 10`, 1 plugin found, SUCCESS, exit 0 |
+| `auval` | PASS | `AU VALIDATION SUCCEEDED.` |
+
+**One caveat on the numbers, and it is the same one `tests/CpuLoadTests.cpp`
+records.** The machine was carrying other work throughout — a one-minute load
+average between 5.9 and 28.4 on 8 CPUs, across the runs. No gate above is a
+wall-clock assertion, so no verdict is affected; the *durations* in
+`report.md` are noise and should not be read as measurements. `scripts/qa-gate.sh` records the load average
+beside every run for exactly this reason, and its report says so itself when
+the machine was loaded.
+
+### What is left, and it is only ears
+
+Everything in this document that a machine can decide is decided, and it
+passes. What remains is Part 2, and it is short enough to state in full:
+
+1. **The installation smoke test** — blocked on #31 (Developer ID secrets).
+   There is no signed, notarized artefact to install.
+2. **Anything requiring a running DAW** — the Logic and Reaper protocols, and
+   the host-side half of offline-vs-realtime bounce and delay compensation.
+3. **The voicing approvals** — Gnaw, Wool, Razor, Circuit-vs-Classic as the
+   default, the Smooth RMS detector on sustained low notes, the Modern gate on
+   chugs, the twelve factory presets on a real bass DI, and the four bundled
+   IRs. No pass/fail criterion exists for any of them.
+4. **The feel of the accessibility surface** — whether VoiceOver's actual
+   speech is useful, and whether the editor is legible rather than merely
+   unclipped.
+
+Nothing on that list can be automated without changing what it means.
