@@ -1,0 +1,88 @@
+name: QA gate
+
+# The machine-decidable half of docs/qa-checklist.md (issue #34), run as one
+# command: scripts/qa-gate.sh.
+#
+# Why this is a separate workflow rather than a job in ci.yml
+# ----------------------------------------------------------
+# It would duplicate the CI build on every pull request for no new signal - CI
+# already builds both platforms, runs the suite, and runs pluginval and auval
+# on macOS. What this workflow adds is the *release-time* view: one artefact
+# that says which gates ran, what they measured, and on which commit. So it
+# runs when that view is wanted - on demand, and on a release tag - plus on any
+# pull request that touches the gate itself, because a gate script nobody
+# exercises until release day is a gate that fails on release day.
+#
+# macOS only, on purpose: the AU half of the gate (pluginval on the .component,
+# auval) does not exist on any other platform, and the Windows VST3 is already
+# validated at the same strictness by ci.yml.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'scripts/**'
+      - '.github/workflows/qa-gate.yml'
+      - '.github/scripts/assert-pluginval-passed.sh'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  qa-gate:
+    name: v1.0.0 QA gate (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set CPM source cache path
+        shell: bash
+        run: echo "CPM_SOURCE_CACHE=$HOME/.cache/CPM" >> "$GITHUB_ENV"
+
+      - name: Cache CPM dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: ${{ runner.os }}-cpm-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-cpm-
+
+      - name: Install Ninja
+        run: brew install ninja
+
+      - name: Run the QA gate
+        timeout-minutes: 40
+        shell: bash
+        run: ./scripts/qa-gate.sh
+
+      - name: Publish the report to the job summary
+        # Runs even on failure: a failed gate's report is the thing worth
+        # reading, and burying it in the log defeats the point of writing one.
+        if: always()
+        shell: bash
+        run: |
+          if [ -f build/qa-gate/report.md ]; then
+            cat build/qa-gate/report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The QA gate produced no report - it failed before writing one." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the report and gate logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qa-gate-report
+          path: |
+            build/qa-gate/report.md
+            build/qa-gate/report.json
+            build/qa-gate/logs/**
+          if-no-files-found: error
