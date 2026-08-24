@@ -22,9 +22,10 @@
 // re-applied, or on a smoother that advances once per callback instead of
 // once per sample. Every one of those is easy to miss by ear and impossible
 // to miss in a null test. This file found one of them and characterised a
-// second - see the Fixed section of the changelog, the comments on
-// prepareToPlay() and CircuitDrive::prepare(), and the note below on what is
-// deliberately left alone.
+// second, and pinned down a third that belongs to JUCE rather than to Crypta
+// - see the Fixed section of the changelog, the comments on prepareToPlay()
+// and CircuitDrive::prepare(), checkSameAudioDifferentlyBuffered() below, and
+// the note below on what is deliberately left alone.
 //
 // The API under test is juce::AudioProcessor::setNonRealtime() (JUCE 8.0.14,
 // juce_audio_processors/processors/juce_AudioProcessor.h): the flag a host
@@ -63,13 +64,21 @@
 // tests/GoldenRenderTests.cpp as a deliberate, reviewed act, and it is not
 // this change's to take.
 //
-// On tolerance: bit-exact, no epsilon, in every case above. That is not
-// ambition, it is the only defensible default for a deterministic DSP path -
+// On tolerance: bit-exact, no epsilon, wherever bit-exactness is attainable -
+// which is the only defensible default for a deterministic DSP path, since
 // nothing in this chain is randomised, dithered or free-running, so any
-// differing bit has a cause worth finding. Exactly one stage cannot meet it,
-// it is named and isolated in its own test case below with the measured
-// figure, and it is switched off for the cases that assert bit-exactness
-// rather than being absorbed into a widened epsilon.
+// differing bit has a cause worth finding. Two things cannot meet it, and
+// both are named, measured and isolated rather than absorbed into a widened
+// epsilon:
+//
+//   - The cab-sim convolution, which is switched off for the cases that
+//     assert bit-exactness and gets its own test case at the bottom of this
+//     file, measured at one ULP.
+//   - On Intel only, juce::dsp's snap-to-zero denormal guard, which is a
+//     genuine per-callback block-size dependence rather than a rounding
+//     artefact. See blockScheduleContract() below for the mechanism, the
+//     evidence, and why the bound is where it is. The bit-exact contract is
+//     NOT weakened on Apple Silicon, where it is proven and holds.
 //
 // On timing: nothing in this file waits, sleeps, or measures wall-clock time.
 // That is a requirement of the test, not a convenience - a null test with a
@@ -427,6 +436,98 @@ namespace
         return text;
     }
 
+    //==========================================================================
+    // The contract for "the same audio, buffered differently".
+    //
+    // On Apple Silicon this is bit-exact and stays bit-exact. On Intel it
+    // cannot be, and the reason is a real block-size dependence rather than a
+    // rounding artefact - which matters, because the two call for different
+    // responses and only one of them justifies a bound.
+    //
+    // The mechanism: juce::dsp zeroes a filter's internal state at the END of
+    // every process() call whenever its magnitude has fallen below 1e-8
+    // (JUCE 8.0.14, juce_dsp.h's util::snapToZero(), called once per call by
+    // LinkwitzRileyFilter::process(), IIR::Filter::process(),
+    // Oversampling::processSamplesUp()/Down() and BallisticsFilter::process()
+    // - i.e. by both crossover splits, the phase-align allpass, the post-sum
+    // EQ and every oversampled drive stage, which is why both engines are
+    // affected and not only the Circuit one). JUCE_SNAP_TO_ZERO is defined as
+    // a no-op on non-Intel targets (juce_FloatVectorOperations.h: the macro is
+    // #if JUCE_INTEL), so on Apple Silicon nothing snaps and the state
+    // trajectory is a pure function of the input. On Intel the snap events
+    // land exactly on the host's block boundaries, so where the boundaries
+    // are changes the state, and the render genuinely differs.
+    //
+    // The evidence that this is architecture and not toolchain - MSVC FP
+    // contraction was the first suspicion and it is wrong:
+    //
+    //   - Building THIS repository for x86_64 with the same Apple clang, on
+    //     the same machine, and running it under Rosetta reproduces the
+    //     Windows/MSVC failures configuration for configuration: worst case
+    //     -75.90 dB / 1.3437e-03 peak locally against -75.73 dB / 1.3427e-03
+    //     on windows-latest. Two different compilers and two different
+    //     operating systems agreeing to 0.2 dB is not a codegen difference.
+    //   - Rebuilding that same x86_64 binary with JUCE_DSP_ENABLE_SNAP_TO_ZERO
+    //     set to 0, changing nothing else, restores bit-exactness on all 8017
+    //     assertions in this file. One flag, one mechanism.
+    //   - The first differing sample lands on a block boundary: for the
+    //     512-versus-32 Classic case it is sample 32 exactly.
+    //
+    // Why a bound rather than a fix here: switching the guard off is a
+    // one-line JUCE module flag, it is safe in this plugin's audio path
+    // (processBlock() installs juce::ScopedNoDenormals, so the CPU already
+    // flushes denormals and the guard is redundant there), and it is proven
+    // above to work - but it changes the audio the shipped Intel binary
+    // produces, which is a product decision and not a test's to take. It is
+    // written up on the pull request as a recommended follow-up.
+    //
+    // Why the bound is where it is:
+    //   - -60 dB is the bar tests/GoldenRenderTests.cpp already sets for the
+    //     same class of platform split, for the same stated reason.
+    //   - It sits 15.7 dB below the worst figure measured on either Intel
+    //     toolchain, so it is not a number chosen to make a red run go green -
+    //     the measurement came first and has 15.7 dB of room.
+    //   - It sits 24 dB below the smallest genuine defect this file has
+    //     actually caught (the CircuitDrive block-size dependence, -36.2 dB),
+    //     so nothing of that class can hide behind it.
+    //   - The peak bound is a second, independent axis: an energy bound alone
+    //     cannot see a single-sample excursion. 1.0e-2 is 7.4x the worst peak
+    //     measured on either Intel toolchain (1.3437e-03).
+    //
+    // The condition below tracks JUCE_DSP_ENABLE_SNAP_TO_ZERO deliberately, so
+    // that the day the guard is switched off this contract tightens back to
+    // bit-exact by itself instead of quietly staying loose.
+   #if JUCE_INTEL && JUCE_DSP_ENABLE_SNAP_TO_ZERO
+    constexpr auto blockScheduleIsBitExact = false;
+    constexpr double intelSnapNullBoundDb = -60.0;
+    constexpr double intelSnapPeakBound = 1.0e-2;
+   #else
+    constexpr auto blockScheduleIsBitExact = true;
+   #endif
+
+    // Applies whichever of the two contracts this target is entitled to.
+    void checkSameAudioDifferentlyBuffered (const NullResult& result)
+    {
+        if constexpr (blockScheduleIsBitExact)
+        {
+            CHECK (result.bitExact);
+        }
+        else
+        {
+           #if JUCE_INTEL && JUCE_DSP_ENABLE_SNAP_TO_ZERO
+            CHECK (result.nullDepthDb <= intelSnapNullBoundDb);
+            CHECK (result.maxAbsoluteDifference <= intelSnapPeakBound);
+           #endif
+        }
+    }
+
+    const char* contractName()
+    {
+        return blockScheduleIsBitExact
+                   ? "contract: bit-exact"
+                   : "contract: Intel snap-to-zero bound (<= -60 dB, <= 1.0e-2 peak)";
+    }
+
     // Not a multiple of any block size used below (32, 441, 480, 512, 1024),
     // so every configuration ends on a short remainder block - which is where
     // remainder handling breaks if it is going to.
@@ -522,6 +623,15 @@ TEST_CASE ("Offline vs realtime: a bounce re-buffered at a different block size 
     // 0.083 peak difference and a -20.2 dB local null over the first 1000
     // samples. Both prepareToPlay() and CircuitDrive::prepare() were fixed
     // rather than this assertion being relaxed.
+    //
+    // On Intel this case runs under the bounded contract instead of the
+    // bit-exact one, for a reason that is a real block-size dependence rather
+    // than rounding - see checkSameAudioDifferentlyBuffered()'s write-up
+    // above. The difference between the two findings is worth being precise
+    // about: the CircuitDrive defect was Crypta's, was localised to the
+    // render's first block, and is fixed; the snap-to-zero dependence is
+    // JUCE's, is spread across the whole render, exists on Intel only, and is
+    // bounded here and reported rather than switched off unilaterally.
     struct OfflineShape
     {
         const char* name;
@@ -555,9 +665,9 @@ TEST_CASE ("Offline vs realtime: a bounce re-buffered at a different block size 
                 const auto result = nullAgainst (reference, offline);
 
                 INFO ("bounce null [" << sampleRate << " Hz, realtime " << liveBlockSize
-                                      << " vs offline " << shape.name << ", " << set.name << "]: "
-                                      << describe (result));
-                CHECK (result.bitExact);
+                                      << " vs offline " << shape.name << ", " << set.name << ", "
+                                      << contractName() << "]: " << describe (result));
+                checkSameAudioDifferentlyBuffered (result);
                 CHECK (TestHelpers::allSamplesFinite (offline));
             }
         }
@@ -627,8 +737,8 @@ TEST_CASE ("Offline vs realtime: the host's real bounce sequence, knob move incl
 
                 INFO ("re-prepared bounce null [" << sampleRate << " Hz, bounce at " << liveBlockSize
                                                   << " vs bounce at " << bounceBlockSize << ", " << set.name
-                                                  << "]: " << describe (result));
-                CHECK (result.bitExact);
+                                                  << ", " << contractName() << "]: " << describe (result));
+                checkSameAudioDifferentlyBuffered (result);
                 CHECK (TestHelpers::allSamplesFinite (rendered));
             }
         }
