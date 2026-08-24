@@ -167,6 +167,28 @@ uncontended measurement of this plugin's CPU cost exists; the box available was
 never idle enough to produce one, so the checklist item is *instrumented* rather
 than *answered*.
 
+**2026-08-24 update — a CI runner is not a quiet box either.**
+[`.github/workflows/cpu-load.yml`](../.github/workflows/cpu-load.yml) runs
+`./Tests "[.cpu]" -s` on demand on a fresh GitHub-hosted `macos-latest` runner,
+on the theory that a freshly booted VM is the closest thing to an idle machine
+available here. It is not: the run reported a one-minute load average of
+**16.5–18.0** eight minutes after boot, on a runner doing nothing else — by
+this document's own "near zero" bar, that is still not a clean measurement,
+and the number is recorded as a datapoint rather than an answer.
+
+The figures themselves (44.1–192 kHz: 12.4x–21.3x realtime, 4.7–8.1% of one
+core; block sizes 16–2048 @ 48 kHz: 17.6x–23.4x; per-stage cost at 48 kHz /
+512: 23.6x–29.7x depending on what is engaged) land inside the same range two
+separate contended local runs measured — 5.9–28.4 load average on 2026-08-22,
+and 22.8–24.0 load average on 2026-08-24 (see `git log` on this file) — despite
+those three environments disagreeing on load average by more than an order of
+magnitude. That convergence is circumstantial, not a substitute for a clean
+run: it is offered as one further reason not to expect the ranking of one
+configuration against another to be an artefact of contention, not as a
+resolution of this item. **This checklist item stays *instrumented, not
+answered*.** If a genuinely idle machine becomes available, `workflow_dispatch`
+the CPU load report or run `./Tests "[.cpu]"` locally and replace this note.
+
 ---
 
 ## Part 2 — manual, needs a person
