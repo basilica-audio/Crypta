@@ -29,6 +29,7 @@ param-sweep	[sweep],[automation]	max step while transitioning	Every parameter at
 state-recall	[state],[migration],[presets]	-	Parameter and preset recall: save/load round-trip, deterministic migration, foreign-preset rejection
 rate-and-block	[sample-rate],[chunking],[robustness],[reset],[long-run]	-	Sample-rate and block-size sweep: block-size independence, degenerate input, reset semantics, no NaN/Inf
 null-tests	[golden],[transparency],[gain-staging]	(null RMS|null depth)	Null tests: committed golden renders, bit-exact passthrough paths, gain-staging identities
+offline-realtime	[offline-realtime]	(null depth|max abs diff)	Offline bounce equals realtime processing: bit-exact across sample rates, block sizes and ragged remainders (#34, PR #97)
 aliasing	[aliasing],[adaa]	(alias|dB)	Alias-to-signal budget per voicing and engine
 voicing-measured	[voicing],[character],[growl],[circuit]	-	The voicings measure the way the design brief says they do (measured, not heard - see Part 2)
 content	[factory],[content],[licence],[ir]	-	Bundled IRs re-measured from the embedded bytes, and the licence bar holds

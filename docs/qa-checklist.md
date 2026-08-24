@@ -74,6 +74,7 @@ new signal.
 | AU validation | `auval -strict -v aufx Cryp Yvsv` after installing the built `.component` | `ci.yml` |
 | No allocations on the audio thread | `AllocationGuard` around `processBlock` on both drive engines, across engine switches, oversized blocks and long silences | `tests/RobustnessTests.cpp` (`[realtime]`) |
 | Block-size independence | An oversized host block renders sample-identically to the same signal fed in properly-sized sub-blocks | `tests/ChunkingTests.cpp` |
+| Offline == realtime, bit-exact | The same passage rendered with `setNonRealtime()` and re-buffered at 32/441/480/1024/ragged blocks nulls to −inf dB against the realtime pass, at 44.1 and 48 kHz, including the short final block. One stage is excluded and bounded rather than tolerated: `juce::dsp::Convolution` builds its FFT engine from `maximumBlockSize`, so it rounds within one ULP (measured 1.19e-07 = 2⁻²³) | `tests/OfflineRealtimeNullTests.cpp` (`[offline-realtime]`) |
 | No NaN/Inf, no crash on degenerate input | Denormal-range input, zero-sample buffers, bypassed and active | `tests/RobustnessTests.cpp` |
 | Deterministic render vs. committed goldens | Legacy v0.2.0 sessions still render identically under the current engine; the engaged safety clip stays inside its documented −40 dB null | `tests/GoldenRenderTests.cpp` |
 | State round-trip | Every parameter of the full set survives save → load; v2 state round-trips with all 54 parameters | `tests/StateTests.cpp`, `tests/StateMigrationTests.cpp` |
@@ -268,8 +269,23 @@ not marked below:
 
 ### Offline bounce vs. realtime
 
-Block-size independence is already proven in CI, so what is being checked here
-is the *host's* offline path, not the plugin's arithmetic.
+Offline-vs-realtime equivalence **is** proven in CI now — see
+`tests/OfflineRealtimeNullTests.cpp` (`[offline-realtime]`), bit-exact across
+44.1/48 kHz and every block size including ragged remainders. What is left for
+a human here is the *host's* offline path: whether Logic and Reaper actually
+drive the plugin the way the test assumes.
+
+That sentence used to read "block-size independence is already proven in CI,
+so what is being checked here is the host's offline path, not the plugin's
+arithmetic." **That was wrong, and it was wrong in the direction that costs
+you a bug.** `ChunkingTests.cpp` proves an oversized block equals the same
+signal in sub-blocks — but not that an engine *re-prepared* at a different
+block size renders identically. It does not, or rather it did not:
+`CircuitDrive`'s ramps interpolate across exactly one block whatever its
+length, so the first render block depended on the host's buffer size (0.7 ms
+at 32 samples, 21.3 ms at 1024). Measured −58.7 dB null before the fix in
+PR #97. A checklist that tells the tester "the arithmetic is fine, only check
+the host" is how that survives a listening pass.
 
 - [ ] Bounce the same passage offline and in realtime in Logic; null the two
       against each other — the difference is at the noise floor.

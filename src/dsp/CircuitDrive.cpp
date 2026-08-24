@@ -304,6 +304,22 @@ namespace cryp
                 woolCurve.build ([scale] (double x) { return solveDiodeClipper (x) * scale; }, woolTableRange);
         }
 
+        // Re-arm the one-shot ramp snap below, so that updateCoefficients()
+        // starts this engine AT its control values rather than sliding up to
+        // them across the first block. It is a one-shot per object, and a
+        // re-prepare is a second first block: prepare() has just rebuilt the
+        // oversampler and is about to reset() every filter, shaper and delay
+        // in the engine, so there is no previous block left to ramp from.
+        //
+        // Leaving it un-armed is what made an offline bounce differ from
+        // realtime playback (issue #34). Hosts re-prepare when they switch to
+        // rendering, usually at a different buffer size, and RampedScalar's
+        // ramp spans exactly one block whatever that block's length - so the
+        // stale ramp would play out over the render's first block and make
+        // its first ~10-20 ms a function of the host's buffer size. See
+        // tests/OfflineRealtimeNullTests.cpp.
+        rampsInitialised = false;
+
         updateCoefficients();
         reset();
     }
