@@ -7,13 +7,28 @@
 // Factory impulse-response slot mechanics (issue #21).
 //
 // SCOPE, STATED PLAINLY: this file is the *mechanism* for bundling cab IRs in
-// the binary and handing them to cryp::IRLoader. It ships with an EMPTY asset
-// table. No impulse response is bundled with Crypta today, because none has
-// been sourced with a licence this project is willing to stake a distributed
-// AGPLv3 binary on. Bundling an IR whose provenance is "found on a forum" or
-// "free download" is a licensing liability, not a feature - so the content
-// side stays open (see the follow-up issue linked from #21) and the code side
-// is finished, tested and ready for the moment a verified set exists.
+// the binary and handing them to cryp::IRLoader.
+//
+// FOUR impulse responses ship with Crypta today (issue #81), registered in
+// CryptaAudioProcessor::getFactoryIRAssetTable(). This comment used to say
+// the asset table was EMPTY and that none had been sourced with a licence
+// worth staking a distributed AGPLv3 binary on - true when it was written,
+// and the reasoning behind it is still exactly right, which is why it is
+// restated rather than deleted: a capture carries rights from the cabinet,
+// from the microphone and from whoever pressed record, third-party packs
+// routinely misstate all three, and "free download" is not a licence.
+//
+// That question was not answered. It was AVOIDED. The four that ship are
+// GENERATED, not recorded - tools/ir-synth/cabsynth.py computes each from a
+// documented analytical cabinet model, so there is no third-party recording
+// inside the binary and therefore nothing to trace and no licensor to find.
+// Their display names all begin with "Modelled" so a user reading a preset
+// list is never left thinking otherwise. Provenance, per-file model
+// parameters, checksums and the measured response of each are in
+// resources/irs/LICENSES.md; the CC0 dedication is at resources/irs/CC0-1.0.txt.
+//
+// The licence bar below is therefore NOT dormant - it is the thing that keeps
+// a future hand-added capture from slipping in beside them.
 //
 // The licence bar, enforced in code rather than in a README.
 // Every asset registered here must name a licence from the approved list
