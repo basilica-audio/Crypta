@@ -468,10 +468,33 @@ void CryptaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     // v0.3.0 Circuit engine. Always prepared, whichever engine is currently
     // selected, so that switching is a branch rather than an allocation - and
     // so the crossfade can render both.
-    circuitDrive.prepare (spec);
+    //
+    // Every control is pushed in BEFORE prepare(), for the same reason
+    // cryp::LowGrowl's and the DryWetMixer stages' values are above:
+    // CircuitDrive::prepare() snaps the engine's per-block control ramps to
+    // whatever values it finds, and any value it does not find is ramped up
+    // to from a constructed default across the first block instead. That ramp
+    // is exactly one block long however long the block is, so an unsnapped
+    // ramp makes the first ~10-20 ms of a render a function of the host's
+    // buffer size - which is precisely how an offline bounce came to differ
+    // from realtime playback (issue #34; measured at a -20.2 dB null over the
+    // first 1000 samples, 0.045 peak difference, between a 512-sample and a
+    // 1024-sample render of the same passage). See
+    // tests/OfflineRealtimeNullTests.cpp.
     circuitDrive.setSplitHighHz (cryp::clampSplitHighHz (splitLowHzParam->load (std::memory_order_relaxed),
                                                           splitHighHzParam->load (std::memory_order_relaxed)));
     circuitDrive.setHighTightHz (highTightHzParam->load (std::memory_order_relaxed));
+    circuitDrive.setMidDrive (midDrivePercent->load (std::memory_order_relaxed) / 100.0f);
+    circuitDrive.setVoicing (static_cast<cryp::VoicingType> (
+        juce::jlimit (0, 2, static_cast<int> (highVoicingChoice->load (std::memory_order_relaxed)))));
+    circuitDrive.setHighDrive (highDrivePercent->load (std::memory_order_relaxed) / 100.0f);
+    circuitDrive.setHighTone (highTonePercent->load (std::memory_order_relaxed) / 100.0f);
+    circuitDrive.setHighBlend (highBlendPercent->load (std::memory_order_relaxed) / 100.0f);
+    circuitDrive.setHighBias (highBiasPercent->load (std::memory_order_relaxed) / 100.0f);
+    circuitDrive.setMidLevelDb (midLevelDb->load (std::memory_order_relaxed));
+    circuitDrive.setHighLevelDb (highLevelDb->load (std::memory_order_relaxed));
+
+    circuitDrive.prepare (spec);
 
     // Seed the engine-change detector so the very first block after
     // prepareToPlay() is not mistaken for a switch.
