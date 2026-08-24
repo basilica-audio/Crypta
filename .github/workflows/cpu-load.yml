@@ -1,0 +1,78 @@
+name: CPU load report
+
+# On-demand CPU cost measurement (docs/qa-checklist.md, "CPU cost").
+#
+# tests/CpuLoadTests.cpp ([.cpu]) is hidden from the default run and from
+# scripts/qa-gate.sh on purpose: it is a wall-clock report, not an assertion,
+# and a wall-clock number on a machine that is not idle measures the machine
+# rather than the plugin. The checklist item has stayed "instrumented, not
+# answered" because no idle box was available to run it on.
+#
+# A GitHub-hosted macos-latest runner picked up on demand is the closest thing
+# to an idle box available here: it is a fresh VM with no other load, and the
+# test itself prints the one-minute load average beside every figure so a
+# contended run still identifies itself rather than being mistaken for a clean
+# one.
+#
+# This does not gate anything - CpuLoadTests.cpp asserts only that renders stay
+# finite, never a timing threshold - so it is workflow_dispatch only and never
+# blocks a pull request or a release.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu-load:
+    name: CPU load report (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set CPM source cache path
+        shell: bash
+        run: echo "CPM_SOURCE_CACHE=$HOME/.cache/CPM" >> "$GITHUB_ENV"
+
+      - name: Cache CPM dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: ${{ runner.os }}-cpm-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-cpm-
+
+      - name: Install Ninja
+        run: brew install ninja
+
+      - name: Configure and build the Tests binary
+        shell: bash
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target Tests
+
+      - name: Report load average before the run
+        shell: bash
+        run: uptime
+
+      - name: Run the CPU load report
+        shell: bash
+        working-directory: build
+        run: |
+          {
+            echo '```'
+            ./Tests "[.cpu]" -s
+            echo '```'
+          } | tee cpu-load-report.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the raw report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cpu-load-report
+          path: build/cpu-load-report.txt
+          if-no-files-found: ignore
