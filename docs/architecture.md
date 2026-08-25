@@ -104,9 +104,15 @@ The Mid band's staged drive (`cryp::MidBand`) and the High band's voicing (`cryp
 
 `CryptaAudioProcessor::computeTotalLatencySamples()` reports that shared value to the host via `setLatencySamples()`, so host-side plugin delay compensation (PDC) accounts for the whole chain.
 
-### The `DryWetMixer` priming gotcha (JUCE 8.0.14)
+### The `prepare()` priming gotcha (JUCE 8.0.14)
+
+This applies to every smoothed `juce::dsp` stage in the chain, not only to the mixers - it was found on `DryWetMixer` first and cost a real defect on `juce::dsp::Gain` later (issue #98), so it is stated generally: **anything whose `prepare()` snaps a `SmoothedValue` must be told its value before `prepare()` runs, never after.**
 
 `juce::dsp::DryWetMixer::prepare()` calls `reset()` internally, which snaps its smoothed dry/wet volumes to whatever `mix` was set to *at that moment* - so if `prepare()` runs before the real mix value is set, the mixer briefly snaps to a stale default before the next `setWetMixProportion()` call retargets it, causing an audible fade-in glitch on the very first block. `ParallelCompressor::prepare()`, `Voicing::prepare()`, and `IRLoader::prepare()` all take the current mix proportion as an explicit parameter and call `setWetMixProportion()` *before* `prepare()` internally, closing this gap at the API level rather than relying on call-order discipline at every call site. `MidBand` has no `DryWetMixer` (no blend control), so this gotcha does not apply to it.
+
+`juce::dsp::Gain::prepare()` has exactly the same shape and was missed for longer. It calls `reset()`, which is `SmoothedValue::reset (sampleRate, rampDuration)`, and that snaps the smoother's *current* value to whatever *target* the object is holding at that instant. A default-constructed `juce::dsp::Gain` holds a target of `0.0` linear - silence, not unity - so a gain stage prepared before it is told the session's value ramps up from nothing across its whole ramp duration, while a *re*-prepared one (already holding the value) snaps straight to level. That made a freshly constructed instance render its first ~20 ms differently from a re-prepared one: a -13.5 dB null with a 0.485 peak difference on an otherwise neutral chain, and -13.5 dB of level on the opening 20 ms of a steady tone.
+
+`CryptaAudioProcessor::prepareToPlay()` therefore sets the target on all five cascaded gain stages - input trim, the three per-band level trims, output trim - *before* calling `prepare()` on each, and `ParallelCompressor::prepare()` takes the initial makeup gain as an explicit parameter for the same reason it already takes the mix proportion. `reset()` needs no equivalent change: it also snaps current to target, and by the time a host can call it the target is already the session's value, so a mid-session transport stop or loop re-arms at level. `tests/OfflineRealtimeNullTests.cpp` asserts all three bring-up paths - prepared once, prepared twice, `reset()` before the first block - render bit-identically.
 
 ## Drive engines (v0.3.0)
 

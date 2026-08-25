@@ -32,7 +32,17 @@ namespace cryp
         // gotcha), so passing the real value here - rather than setting it
         // only after prepare() - avoids an audible fade-in glitch on the
         // very first block.
-        void prepare (const juce::dsp::ProcessSpec& spec, float initialWetMixProportion01);
+        // `initialMakeupGainDb` is primed the same way and for the same
+        // reason (issue #98): juce::dsp::Gain::prepare() snaps its smoother to
+        // whatever target the object currently holds, and a default-constructed
+        // one holds silence - so a makeup stage prepared before it is told its
+        // value ramps up from nothing across its first 20 ms on a fresh
+        // instance while a re-prepared one starts at level. 0 dB is the
+        // default because it is the neutral value for a makeup gain: a caller
+        // that says nothing gets unity, not silence.
+        void prepare (const juce::dsp::ProcessSpec& spec,
+                       float initialWetMixProportion01,
+                       float initialMakeupGainDb = 0.0f);
         void reset();
 
         // All real-time safe: Compressor's setters just recompute ballistics

@@ -28,19 +28,26 @@
 // CI; regenerating goldens is a deliberate, reviewed act, not something a
 // stray test run can do.
 //
-// Per-configuration assertion (brief §6 T10(b) + the CI note): bit-exact
-// float rendering does NOT hold across architectures or toolchains - MSVC's
-// std::tanh and Apple libm's differ in the last ulp, and FMA contraction and
-// SIMD codegen differ between arm64 and x86_64 even under one compiler.
-// **macOS on arm64** is therefore the bit-exactness golden configuration
-// (sample-exact memcmp), because that is where the fixtures were generated;
-// every other configuration - including a macOS x86_64 slice, which CI
-// already builds - asserts an RMS null of <= -60 dB relative to the golden's
-// own level, which is far tighter than any real regression could sneak
-// through but tolerant of the drift measured on the Windows runner and under
-// Rosetta (see the comment at the assertion for the figures and for why that
-// drift is louder than a last ulp). The switch lives here in test code, so
-// .github/workflows/* stays untouched (brief §5 blacklist).
+// The contract is measured in two regions, not one (issue #98). The render's
+// opening 40 ms is a deliberate, one-time divergence from v0.2.0 - the gain
+// stages no longer ramp up from silence - and is held to a bounded difference
+// rather than to zero; everything after it is still the legacy render and is
+// held as tightly as the build configuration allows. The fixtures are NOT
+// regenerated to absorb the change; the reasoning is written out at the
+// assertion.
+//
+// Per-configuration strictness for that second region (brief §6 T10(b) + the
+// CI note): bit-exact float rendering does NOT hold across architectures or
+// toolchains - MSVC's std::tanh and Apple libm's differ in the last ulp, and
+// FMA contraction and SIMD codegen differ between arm64 and x86_64 even under
+// one compiler. **macOS on arm64** is the fixture-generating configuration and
+// is held to -85 dB; every other configuration - including a macOS x86_64
+// slice, which CI already builds - is held to -60 dB, which is far tighter
+// than any real regression could sneak through but tolerant of the drift
+// measured on the Windows runner and under Rosetta (see the comment at the
+// assertion for the figures and for why that drift is louder than a last
+// ulp). The switch lives here in test code, so .github/workflows/* stays
+// untouched (brief §5 blacklist).
 namespace
 {
     constexpr double goldenSampleRate = 48000.0;
@@ -55,6 +62,73 @@ namespace
     // attack/release and gate close inside the window.
     constexpr int goldenNumSamples = 12000;
     constexpr int goldenNumChannels = 2;
+
+    // Issue #98: the render's opening is deliberately no longer identical to
+    // v0.2.0's, and this is where the two regions are divided.
+    //
+    // v0.2.0 opened every render with a ~20 ms ramp up from silence, because
+    // juce::dsp::Gain::prepare() snaps its smoother to whatever target the
+    // object holds and prepareToPlay() prepared the five cascaded gain stages
+    // (and the low-band compressor's makeup gain) BEFORE telling them the
+    // session's value. That is a defect, not a voicing choice, and it is fixed
+    // - so a legacy session is NOT supposed to render identically here any
+    // more. See the write-up at the assertion below for why the fixtures are
+    // not regenerated to absorb it.
+    //
+    // 40 ms rather than the 20 ms of the ramp itself: the gate and the
+    // low-band compressor both take decisions off a detector level, so they
+    // need roughly another burst of the programme's 120 ms cycle to converge
+    // back onto the same trajectory. Measured region by region on arm64, the
+    // relative null against the fixtures is -31.7 dB from sample 0, -64.6 dB
+    // from 960 (the end of the ramp), and -90.8 dB from 1920, where it
+    // settles; it does not improve further out (-90.4 dB from 2880, -93.7 dB
+    // from 9600).
+    constexpr int goldenPrimingRegionSamples = 1920; // 40 ms at 48 kHz
+
+    // Relative null of one region of the render against the same region of the
+    // fixture, plus the peak difference - a second, independent axis, because
+    // energy alone cannot see a single-sample excursion.
+    struct RegionNull
+    {
+        double relativeDb = 0.0;
+        double peakDifference = 0.0;
+        double goldenRms = 0.0;
+    };
+
+    RegionNull nullOverRegion (const std::vector<float>& rendered,
+                                const std::vector<float>& golden,
+                                int firstSample,
+                                int lastSamplePlusOne)
+    {
+        RegionNull result;
+        double differenceSquares = 0.0;
+        double goldenSquares = 0.0;
+
+        // The fixtures are channel-major: all of channel 0, then all of
+        // channel 1 (see flatten()), so a region is a window inside each
+        // channel's own run rather than a contiguous slice of the file.
+        for (int channel = 0; channel < goldenNumChannels; ++channel)
+        {
+            const auto base = static_cast<size_t> (channel * goldenNumSamples);
+
+            for (int sample = firstSample; sample < lastSamplePlusOne; ++sample)
+            {
+                const auto goldenSample = static_cast<double> (golden[base + static_cast<size_t> (sample)]);
+                const auto difference = static_cast<double> (rendered[base + static_cast<size_t> (sample)]) - goldenSample;
+
+                differenceSquares += difference * difference;
+                goldenSquares += goldenSample * goldenSample;
+                result.peakDifference = juce::jmax (result.peakDifference, std::abs (difference));
+            }
+        }
+
+        const auto count = static_cast<double> ((lastSamplePlusOne - firstSample) * goldenNumChannels);
+        result.goldenRms = std::sqrt (goldenSquares / count);
+        result.relativeDb = juce::Decibels::gainToDecibels (
+            std::sqrt (differenceSquares / count) / result.goldenRms, -200.0);
+
+        return result;
+    }
 
     // Deterministic, toolchain-independent program material: a fixed-seed
     // 32-bit LCG (spelled out here rather than using juce::Random or
@@ -347,89 +421,155 @@ TEST_CASE ("Golden renders: legacy v0.2.0 sessions still render identically unde
         REQUIRE (readGolden (directory.getChildFile (juce::String ("golden_v020_") + config.name + ".f32"), golden));
         REQUIRE (rendered.size() == golden.size());
 
-        // The null is measured on every platform - only the assertion below is
-        // platform-dependent - so that the macOS CI job type-checks this code
-        // too, instead of leaving it to be discovered broken by the Windows
-        // runner twenty minutes later.
+        // The nulls are measured on every platform - only the bar the settled
+        // region is held to is configuration-dependent - so that the macOS CI
+        // job type-checks this code too, instead of leaving it to be
+        // discovered broken by the Windows runner twenty minutes later.
+        const auto opening = nullOverRegion (rendered, golden, 0, goldenPrimingRegionSamples);
+        const auto settled = nullOverRegion (rendered, golden, goldenPrimingRegionSamples, goldenNumSamples);
+        const auto whole = nullOverRegion (rendered, golden, 0, goldenNumSamples);
+
+        // Guards the ratios above: a silent golden would make any render "null".
+        REQUIRE (opening.goldenRms > 1.0e-3);
+        REQUIRE (settled.goldenRms > 1.0e-3);
+
+        INFO ("opening [0," << goldenPrimingRegionSamples << "): " << opening.relativeDb
+              << " dB relative, peak " << opening.peakDifference
+              << " | settled [" << goldenPrimingRegionSamples << ",end): " << settled.relativeDb
+              << " dB relative, peak " << settled.peakDifference
+              << " | whole: " << whole.relativeDb << " dB relative");
+
+        //======================================================================
+        // Issue #98: the opening 40 ms is a DELIBERATE, one-time divergence
+        // from v0.2.0, and the fixtures are deliberately NOT regenerated to
+        // absorb it. Both halves of that sentence were decided rather than
+        // defaulted, so both are written down here.
         //
-        // Away from macOS this is the actual contract, a null relative to the
-        // golden's own RMS.
-        // Cross-toolchain bit-exactness is unattainable (MSVC vs Apple libm
-        // std::tanh/std::exp, FMA and SIMD codegen differences), and the drift
-        // does not stay at the last ulp: the gate and the low-band compressor
-        // both take decisions off a detector level, so a 1-ulp difference near
-        // a threshold shifts a gate transition or a ballistics trajectory by a
-        // sample and produces a locally much larger difference. Measured on the
-        // windows-latest runner (MSVC, Release): -73 dB relative for the worst
-        // of the three fixtures.
+        // Is a legacy v0.2.0 session supposed to render identically after the
+        // priming fix? No - not in its opening 40 ms, and yes everywhere else.
+        // What v0.2.0 did there was ramp every gain stage up from silence
+        // across ~20 ms because prepareToPlay() prepared them before telling
+        // them the session's value (juce::dsp::Gain::prepare() snaps its
+        // smoother to whatever target it finds). That is a defect that v0.2.0
+        // also had; preserving it would mean preserving a bug for the sake of
+        // fidelity to a bug. Outside that window the legacy render is still
+        // the legacy render, and the numbers below say by how much.
         //
-        // 60 dB below program is therefore the bar: comfortably above the
-        // observed toolchain drift, and still far below any failure this test
-        // exists to catch. A migration landing on Circuit / Smooth RMS / Modern
-        // instead of the legacy engines changes the render grossly - tens of dB
-        // of difference, not tens of dB of null - so the discriminating power
-        // is unchanged. The engine-index REQUIREs above pin the migration
-        // itself; this measures that the legacy path is still the legacy path.
-        double sumOfSquares = 0.0;
-        double goldenSumOfSquares = 0.0;
-
-        for (size_t index = 0; index < golden.size(); ++index)
-        {
-            const auto goldenSample = static_cast<double> (golden[index]);
-            const auto difference = static_cast<double> (rendered[index]) - goldenSample;
-            sumOfSquares += difference * difference;
-            goldenSumOfSquares += goldenSample * goldenSample;
-        }
-
-        const auto count = static_cast<double> (golden.size());
-        const auto nullRms = std::sqrt (sumOfSquares / count);
-        const auto goldenRms = std::sqrt (goldenSumOfSquares / count);
-
-        // Guards the ratio below: a silent golden would make any render "null".
-        REQUIRE (goldenRms > 1.0e-3);
-
-        const auto nullDb = juce::Decibels::gainToDecibels (nullRms, -200.0);
-        const auto relativeNullDb = juce::Decibels::gainToDecibels (nullRms / goldenRms, -200.0);
-        INFO ("null RMS: " << nullDb << " dB (" << relativeNullDb << " dB relative to the golden)");
-
-        // Issue #100: the strictness switch is `macOS on arm64`, not `macOS`.
+        // Why the fixtures are not regenerated:
+        //   - They are the only artefact in this repository produced by code
+        //     that no longer exists. Regenerating turns a cross-version lock
+        //     into a snapshot of HEAD, which several other tests already
+        //     provide better (tests/OfflineRealtimeNullTests.cpp is bit-exact
+        //     across every block schedule, both engines and both bring-up
+        //     paths). Nothing else in the suite can compare against v0.2.0.
+        //   - A regenerated fixture absorbs this change silently. A reviewer
+        //     would see three binary files move and have to take the reason on
+        //     faith; keeping them makes the change visible in the source diff
+        //     permanently, with its measured size attached.
+        //   - The file already has precedent for exactly this situation. The
+        //     clip-ON fixture below is a deliberate, documented, non-bit-
+        //     identical change (base-rate tanh -> delta-form ADAA) that was
+        //     given its own bounded contract rather than a fixture refresh.
+        //     This is the same move for the same reason.
+        //   - The documented regeneration path would not work anyway:
+        //     `[.generate-goldens]` run against current code emits a state XML
+        //     carrying a stateVersion attribute, which the well-formedness
+        //     test above rejects by design.
         //
-        // What decides whether bit-exactness is attainable is whether this
-        // build is the one that PRODUCED the fixtures - same architecture,
-        // same toolchain - because that is the only configuration in which
-        // the identical source is guaranteed to emit the identical
-        // instruction sequence. The fixtures are an arm64 Apple-clang
-        // artefact. `#if JUCE_MAC` alone stood in for that and happened to be
-        // right only because every macOS build so far has been arm64.
+        // Measured per fixture, opening region, on arm64: -31.66 dB (gnaw),
+        // -29.94 dB (wool), -31.68 dB (razor) relative, peak 0.0951 in all
+        // three; on macOS x86_64 under Rosetta: -31.66, -29.96, -31.67 dB and
+        // peak 0.0951. -25 dB and 0.12 are therefore roughly 5 dB and 26 % of
+        // headroom over the worst - loose enough not to be a re-measurement of
+        // the current build, tight enough that the region cannot quietly
+        // become something else.
         //
-        // It is wrong the moment a macOS x86_64 build exists, and one does:
+        // The bound is deliberately not configuration-dependent, and the two
+        // sets of figures above are why: the priming difference is 30 dB
+        // larger than the cross-architecture drift, so it dominates this
+        // window everywhere and the same number is honest on every target.
+        // Only the settled region below needs to know which build it is.
+        CHECK (opening.relativeDb <= -25.0);
+        CHECK (opening.peakDifference <= 0.12);
+
+        //======================================================================
+        // Issue #100: the settled region's bar switches on `macOS on arm64`,
+        // not on `macOS`.
+        //
+        // What decides how tightly this can be held is whether the build is
+        // the one that PRODUCED the fixtures - same architecture, same
+        // toolchain - because that is the only configuration in which the
+        // identical source is guaranteed to emit the identical instruction
+        // sequence. The fixtures are an arm64 Apple-clang artefact. `#if
+        // JUCE_MAC` alone stood in for that and happened to be right only
+        // because every macOS build so far has been arm64.
+        //
+        // It was wrong the moment a macOS x86_64 build existed, and one does:
         // CI already builds a Universal Binary (arm64 + x86_64) and simply
         // never runs the x86_64 slice. Building this repository for x86_64
         // with the same Apple clang on the same machine and running it under
-        // Rosetta takes the `memcmp` branch and fails - while measuring
-        // -80.75 dB (gnaw), -73.07 dB (wool) and -80.39 dB (razor) relative,
-        // all comfortably inside this file's own -60 dB bar. The output is
-        // fine; the branch selection was wrong.
+        // Rosetta took the macOS branch and failed - while measuring -80.75 dB
+        // (gnaw), -73.07 dB (wool) and -80.39 dB (razor) relative, all
+        // comfortably inside the -60 dB bar this file sets for everywhere
+        // else. The output was fine; the branch selection was wrong.
         //
-        // Note what this condition is NOT. Issue #99's snap-to-zero guard is
-        // a different property and it is not the one being gated here: with
+        // Note what this condition is NOT. Issue #99's snap-to-zero guard is a
+        // different property and not the one gated here: with
         // JUCE_DSP_ENABLE_SNAP_TO_ZERO=0 those three x86_64 figures are
-        // unchanged to four significant figures, which attributes the whole
-        // of the divergence to cross-architecture codegen - FMA contraction
-        // and libm - rather than to state snapping. Gating this file on the
-        // snap-to-zero flag, as first suggested, would therefore select
-        // `memcmp` on macOS x86_64 and on Windows and fail both.
+        // unchanged to four significant figures, which attributes the whole of
+        // the divergence to cross-architecture codegen - FMA contraction and
+        // libm - rather than to state snapping. Gating on the snap-to-zero
+        // flag, as issue #100 first suggested, would select the strict branch
+        // on macOS x86_64 and on Windows and fail both.
         //
         // Do NOT "fix" a failure here by regenerating the fixtures on another
         // architecture. That would swap which architecture is exact and move
         // the problem rather than remove it; arm64 is the right one to pin,
         // because per issue #99 it is the deterministic one.
 #if JUCE_MAC && JUCE_ARM
-        // The configuration the fixtures were generated in: anything short of
-        // sample-exact is a real change.
-        CHECK (std::memcmp (rendered.data(), golden.data(), golden.size() * sizeof (float)) == 0);
+        // The configuration the fixtures were generated in. Before issue #98
+        // this was a sample-exact memcmp; the priming fix perturbs the gate
+        // and compressor trajectories enough that they settle back onto the
+        // legacy path to -90.78 dB (gnaw), -91.28 dB (wool) and -92.41 dB
+        // (razor) rather than to the last bit, with peak differences of
+        // 1.14e-04, 8.3e-05 and 1.20e-04. Those figures are bit-identical
+        // across repeated runs - nothing here is randomised or free-running -
+        // so -85 dB is 5.4 dB of headroom over the worst of them and not a
+        // number chosen to make a red run green.
+        //
+        // It is worth being explicit that this is a loss: an unintended arm64
+        // change quieter than -85 dB would now pass where a memcmp would have
+        // caught it. It is also 25 dB tighter than the bar the same test
+        // applies everywhere else, and 12 dB tighter than the ordinary
+        // cross-toolchain drift measured on the Windows runner, so it remains
+        // by a wide margin the strictest assertion in the suite about legacy
+        // audio.
+        CHECK (settled.relativeDb <= -85.0);
 #else
-        CHECK (relativeNullDb <= -60.0);
+        // Measured on macOS x86_64 under Rosetta with this contract in place:
+        // -80.43 dB (gnaw), -72.86 dB (wool), -80.00 dB (razor) - so the
+        // priming change costs the settled region essentially nothing here,
+        // because the toolchain drift below already dominates it.
+        //
+        // Cross-toolchain and cross-architecture bit-exactness is unattainable
+        // (MSVC vs Apple libm std::tanh/std::exp; FMA contraction and SIMD
+        // codegen differ between arm64 and x86_64 under one compiler), and the
+        // drift does not stay at the last ulp: the gate and the low-band
+        // compressor both take decisions off a detector level, so a 1-ulp
+        // difference near a threshold shifts a gate transition or a ballistics
+        // trajectory by a sample and produces a locally much larger
+        // difference. Measured on the windows-latest runner (MSVC, Release):
+        // -73 dB relative for the worst of the three fixtures; on macOS
+        // x86_64 under Rosetta, -73.07 dB.
+        //
+        // 60 dB below programme is therefore the bar: comfortably above the
+        // observed drift, and still far below any failure this test exists to
+        // catch. A migration landing on Circuit / Smooth RMS / Modern instead
+        // of the legacy engines changes the render grossly - tens of dB of
+        // difference, not tens of dB of null - so the discriminating power is
+        // unchanged. The engine-index REQUIREs above pin the migration itself;
+        // this measures that the legacy path is still the legacy path.
+        CHECK (settled.relativeDb <= -60.0);
 #endif
     }
 }
