@@ -363,6 +363,108 @@ TEST_CASE ("T16: a long silence after a loud burst does not inflate block time",
     CHECK (silentPerBlock < loudPerBlock * 2.0);
 }
 
+TEST_CASE ("Denormals: nothing denormal survives a decay to silence, at any block size", "[robustness][realtime][denormals]")
+{
+    // Issue #99. juce::dsp used to zero filter state at the end of every
+    // process() call, which handled denormals but made the render depend on
+    // the host's buffer size on Intel. CMakeLists.txt now sets
+    // JUCE_DSP_ENABLE_SNAP_TO_ZERO=0, and the job moves to the FPU:
+    // processBlock() installs juce::ScopedNoDenormals, which sets MXCSR
+    // FTZ|DAZ on Intel and FPCR FZ on ARM for the whole callback.
+    //
+    // That trade is only sound if the replacement actually works, so this
+    // asserts the outcome rather than the mechanism: drive the chain hard,
+    // then feed it digital silence for several seconds and require that not
+    // one sample of the decaying tail is a denormal. A denormal here would
+    // mean the FPU mode is not in force where it needs to be - the exact
+    // regression that removing the guard could have introduced, and the one
+    // that shows up in the field as a CPU spike during the quiet passage
+    // after a loud one rather than as a wrong number.
+    //
+    // Deliberately not a timing assertion. "T16: a long silence after a loud
+    // burst does not inflate block time" above already measures the cost side
+    // and is subject to whatever else the machine is doing; this one is a
+    // pure value check and gives the same answer on an idle runner and a
+    // loaded laptop.
+    //
+    // Swept across block sizes because the guard it replaced fired once per
+    // process() call: if anything in the chain still depended on call
+    // boundaries to stay normal, a small block size would hide it and a large
+    // one would expose it.
+    //
+    // Verified to be capable of failing, which a "count is zero" assertion has
+    // to be before it means anything: commenting out the ScopedNoDenormals in
+    // processBlock() and changing nothing else turns every one of the six
+    // configurations red, at 453022-554216 denormal samples each, the largest
+    // 1.17e-38. So the zero below is the FPU mode doing its job, not the
+    // signal failing to reach the denormal range.
+    for (const auto blockSize : { 32, 128, 512 })
+    {
+        for (const auto engineIndex : { 0, 1 }) // Classic, Circuit
+        {
+            INFO ("block size " << blockSize << ", drive engine " << engineIndex);
+
+            CryptaAudioProcessor processor;
+            processor.setPlayConfigDetails (2, 2, rtSampleRate, blockSize);
+            processor.prepareToPlay (rtSampleRate, blockSize);
+
+            TestHelpers::setParameter (processor, ParamIDs::driveEngine, static_cast<float> (engineIndex));
+            // The gate off: a gate that closes would mask the tail this test
+            // is about by muting it before it can decay into denormal range.
+            TestHelpers::setParameter (processor, ParamIDs::gateEnabled, 0.0f);
+            TestHelpers::setParameter (processor, ParamIDs::eqEnabled, 1.0f);
+            TestHelpers::setParameter (processor, ParamIDs::midDrive, 50.0f);
+            TestHelpers::setParameter (processor, ParamIDs::highDrive, 70.0f);
+            processor.reset();
+
+            juce::AudioBuffer<float> buffer (2, blockSize);
+            juce::MidiBuffer midi;
+
+            // Load every filter, envelope and oversampling history with real
+            // energy first - state that was never excited cannot denormalise
+            // on the way down.
+            for (int block = 0; block * blockSize < static_cast<int> (0.5 * rtSampleRate); ++block)
+            {
+                fillBlock (buffer, 110.0, static_cast<juce::int64> (block) * blockSize, 0.5f);
+                processor.processBlock (buffer, midi);
+            }
+
+            // Then digital silence, long enough for every decaying state
+            // variable to fall through the denormal range (1.18e-38 down to
+            // 1.4e-45) if it is going to.
+            constexpr float smallestNormal = std::numeric_limits<float>::min();
+            auto denormalSamples = 0;
+            auto worstDenormal = 0.0f;
+
+            for (int block = 0; block * blockSize < static_cast<int> (6.0 * rtSampleRate); ++block)
+            {
+                buffer.clear();
+                processor.processBlock (buffer, midi);
+
+                for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+                {
+                    const auto* data = buffer.getReadPointer (channel);
+
+                    for (int sample = 0; sample < blockSize; ++sample)
+                    {
+                        const auto magnitude = std::abs (data[sample]);
+
+                        if (magnitude > 0.0f && magnitude < smallestNormal)
+                        {
+                            ++denormalSamples;
+                            worstDenormal = juce::jmax (worstDenormal, magnitude);
+                        }
+                    }
+                }
+            }
+
+            INFO ("denormal samples " << denormalSamples << ", largest " << worstDenormal);
+            CHECK (denormalSamples == 0);
+            CHECK (TestHelpers::allSamplesFinite (buffer));
+        }
+    }
+}
+
 TEST_CASE ("T15: fast automation produces no zipper noise", "[robustness][automation]")
 {
     // Zipper noise is a TIME-domain artefact: a parameter applied as a

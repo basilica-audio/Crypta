@@ -28,16 +28,19 @@
 // CI; regenerating goldens is a deliberate, reviewed act, not something a
 // stray test run can do.
 //
-// Per-platform assertion (brief §6 T10(b) + the CI note): bit-exact float
-// rendering does NOT hold across toolchains - MSVC's std::tanh and Apple
-// libm's differ in the last ulp, and FMA/SIMD codegen differs too. macOS is
-// therefore the bit-exactness golden platform (sample-exact memcmp); every
-// other platform asserts an RMS null of <= -60 dB relative to the golden's own
-// level, which is far tighter than any real regression could sneak through but
-// tolerant of the toolchain drift measured on the Windows runner (see the
-// comment at the assertion for why that drift is louder than a last ulp). The
-// switch lives here in test code, so .github/workflows/* stays untouched
-// (brief §5 blacklist).
+// Per-configuration assertion (brief §6 T10(b) + the CI note): bit-exact
+// float rendering does NOT hold across architectures or toolchains - MSVC's
+// std::tanh and Apple libm's differ in the last ulp, and FMA contraction and
+// SIMD codegen differ between arm64 and x86_64 even under one compiler.
+// **macOS on arm64** is therefore the bit-exactness golden configuration
+// (sample-exact memcmp), because that is where the fixtures were generated;
+// every other configuration - including a macOS x86_64 slice, which CI
+// already builds - asserts an RMS null of <= -60 dB relative to the golden's
+// own level, which is far tighter than any real regression could sneak
+// through but tolerant of the drift measured on the Windows runner and under
+// Rosetta (see the comment at the assertion for the figures and for why that
+// drift is louder than a last ulp). The switch lives here in test code, so
+// .github/workflows/* stays untouched (brief §5 blacklist).
 namespace
 {
     constexpr double goldenSampleRate = 48000.0;
@@ -389,9 +392,41 @@ TEST_CASE ("Golden renders: legacy v0.2.0 sessions still render identically unde
         const auto relativeNullDb = juce::Decibels::gainToDecibels (nullRms / goldenRms, -200.0);
         INFO ("null RMS: " << nullDb << " dB (" << relativeNullDb << " dB relative to the golden)");
 
-#if JUCE_MAC
-        // macOS is the bit-exactness golden platform: the goldens were
-        // generated here, so anything short of sample-exact is a real change.
+        // Issue #100: the strictness switch is `macOS on arm64`, not `macOS`.
+        //
+        // What decides whether bit-exactness is attainable is whether this
+        // build is the one that PRODUCED the fixtures - same architecture,
+        // same toolchain - because that is the only configuration in which
+        // the identical source is guaranteed to emit the identical
+        // instruction sequence. The fixtures are an arm64 Apple-clang
+        // artefact. `#if JUCE_MAC` alone stood in for that and happened to be
+        // right only because every macOS build so far has been arm64.
+        //
+        // It is wrong the moment a macOS x86_64 build exists, and one does:
+        // CI already builds a Universal Binary (arm64 + x86_64) and simply
+        // never runs the x86_64 slice. Building this repository for x86_64
+        // with the same Apple clang on the same machine and running it under
+        // Rosetta takes the `memcmp` branch and fails - while measuring
+        // -80.75 dB (gnaw), -73.07 dB (wool) and -80.39 dB (razor) relative,
+        // all comfortably inside this file's own -60 dB bar. The output is
+        // fine; the branch selection was wrong.
+        //
+        // Note what this condition is NOT. Issue #99's snap-to-zero guard is
+        // a different property and it is not the one being gated here: with
+        // JUCE_DSP_ENABLE_SNAP_TO_ZERO=0 those three x86_64 figures are
+        // unchanged to four significant figures, which attributes the whole
+        // of the divergence to cross-architecture codegen - FMA contraction
+        // and libm - rather than to state snapping. Gating this file on the
+        // snap-to-zero flag, as first suggested, would therefore select
+        // `memcmp` on macOS x86_64 and on Windows and fail both.
+        //
+        // Do NOT "fix" a failure here by regenerating the fixtures on another
+        // architecture. That would swap which architecture is exact and move
+        // the problem rather than remove it; arm64 is the right one to pin,
+        // because per issue #99 it is the deterministic one.
+#if JUCE_MAC && JUCE_ARM
+        // The configuration the fixtures were generated in: anything short of
+        // sample-exact is a real change.
         CHECK (std::memcmp (rendered.data(), golden.data(), golden.size() * sizeof (float)) == 0);
 #else
         CHECK (relativeNullDb <= -60.0);
