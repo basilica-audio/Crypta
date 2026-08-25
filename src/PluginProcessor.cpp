@@ -444,13 +444,38 @@ void CryptaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     spec.maximumBlockSize = static_cast<juce::uint32> (samplesPerBlock);
     spec.numChannels = static_cast<juce::uint32> (getTotalNumOutputChannels());
 
+    // Issue #98: every one of the five juce::dsp::Gain stages below is given
+    // its target BEFORE prepare(), never after.
+    //
+    // juce::dsp::Gain::prepare() (JUCE 8.0.14) calls reset(), which is
+    // SmoothedValue::reset (sampleRate, rampDuration) - and that snaps the
+    // smoother's current value to whatever TARGET the object is holding at
+    // that instant. A default-constructed juce::dsp::Gain holds a target of
+    // 0.0 linear, i.e. silence, so preparing first and setting the value
+    // afterwards left a freshly constructed instance ramping up from silence
+    // across its first 20 ms, while a re-prepared one - already holding the
+    // session's value - snapped straight to level. Measured at a -13.5 dB
+    // null with a 0.485 peak difference between the two on an otherwise
+    // neutral chain.
+    //
+    // Setting the target first makes prepare()'s snap land on the session's
+    // own value, so the very first block of a fresh instance is at level.
+    // This is the same priming order cryp::LowGrowl, cryp::CircuitDrive and
+    // every DryWetMixer stage in this function already required and
+    // documented, for the same JUCE reason; it was simply not applied to the
+    // plain gain stages.
+    //
+    // reset() needs no equivalent change and gets none: it also snaps current
+    // to target, and by the time a host can call it the target is already the
+    // session's value, so a mid-session transport stop or loop re-arms at
+    // level rather than re-ramping. tests/ResetTests.cpp asserts that.
     inputGainProcessor.setRampDurationSeconds (gainRampDurationSeconds);
-    inputGainProcessor.prepare (spec);
     inputGainProcessor.setGainDecibels (inputGainDb->load (std::memory_order_relaxed));
+    inputGainProcessor.prepare (spec);
 
     outputGainProcessor.setRampDurationSeconds (gainRampDurationSeconds);
-    outputGainProcessor.prepare (spec);
     outputGainProcessor.setGainDecibels (outputGainDb->load (std::memory_order_relaxed));
+    outputGainProcessor.prepare (spec);
 
     // Full-band input noise gate.
     gate.prepare (spec);
@@ -472,11 +497,36 @@ void CryptaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     lowBandPhaseAlign.setCutoffFrequency (cryp::clampSplitHighHz (splitLowHzParam->load (std::memory_order_relaxed),
                                                                    splitHighHzParam->load (std::memory_order_relaxed)));
 
-    // Low-band parallel compressor. The DryWetMixer inside needs its mix
-    // proportion primed *before* prepare() runs its internal reset() (JUCE
-    // 8.0.14 gotcha - see docs/architecture.md), so the current lowCompMix
-    // value is read and passed in here rather than set afterwards.
-    lowCompressor.prepare (spec, lowCompMixPercent->load (std::memory_order_relaxed) / 100.0f);
+    // Low-band parallel compressor. Two things inside it need priming before
+    // prepare() rather than after, and for the same JUCE 8.0.14 reason: the
+    // DryWetMixer's mix proportion (its internal reset() primes the smoothed
+    // dry/wet volumes from whatever `mix` holds at that instant - see
+    // docs/architecture.md) and the makeup gain (issue #98: a juce::dsp::Gain
+    // prepared before it is told its value ramps up from silence on a fresh
+    // instance; the makeup stage alone accounted for 0.062 of the measured
+    // 0.485 peak difference).
+    //
+    // The compressor's static controls are pushed in first so the makeup
+    // figure passed below is the one the first processBlock() will compute,
+    // not an approximation of it: with auto-makeup enabled the effective
+    // makeup is the manual value plus a function of threshold and ratio, and
+    // asking the compressor for it via getEffectiveMakeupDb() keeps that
+    // formula in the one place that owns it (cryp::ParallelCompressor)
+    // instead of restating it here. None of these setters needs a prepared
+    // sample rate; the prepare() below re-derives every coefficient anyway.
+    lowCompressor.setThresholdDb (lowCompThresholdDb->load (std::memory_order_relaxed));
+    lowCompressor.setRatio (lowCompRatio->load (std::memory_order_relaxed));
+    lowCompressor.setAttackMs (lowCompAttackMs->load (std::memory_order_relaxed));
+    lowCompressor.setReleaseMs (lowCompReleaseMs->load (std::memory_order_relaxed));
+    lowCompressor.setUseSmoothRmsDetector (lowCompDetectorChoice->load (std::memory_order_relaxed) >= 0.5f);
+    lowCompressor.setKneeDb (lowCompKneeDb->load (std::memory_order_relaxed));
+    lowCompressor.setAutoRelease (lowCompAutoReleaseFlag->load (std::memory_order_relaxed) >= 0.5f);
+    lowCompressor.setAutoMakeup (lowCompAutoMakeupFlag->load (std::memory_order_relaxed) >= 0.5f);
+
+    lowCompressor.prepare (spec,
+                            lowCompMixPercent->load (std::memory_order_relaxed) / 100.0f,
+                            lowCompressor.getEffectiveMakeupDb (
+                                lowCompMakeupDb->load (std::memory_order_relaxed)));
 
     // v0.4.0 Graaawl branch on the low band. Its controls are pushed in
     // before prepare() so the internal gain smoother starts at the value the
@@ -536,18 +586,19 @@ void CryptaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     engineCrossfadeRemaining = 0;
 
     // Per-band level trims, smoothed the same way as the input/output gains
-    // to avoid zipper noise on automation.
+    // to avoid zipper noise on automation - and primed before prepare() for
+    // the same reason those are (issue #98, see the note above).
     lowGainProcessor.setRampDurationSeconds (gainRampDurationSeconds);
-    lowGainProcessor.prepare (spec);
     lowGainProcessor.setGainDecibels (lowLevelDb->load (std::memory_order_relaxed));
+    lowGainProcessor.prepare (spec);
 
     midGainProcessor.setRampDurationSeconds (gainRampDurationSeconds);
-    midGainProcessor.prepare (spec);
     midGainProcessor.setGainDecibels (midLevelDb->load (std::memory_order_relaxed));
+    midGainProcessor.prepare (spec);
 
     highGainProcessor.setRampDurationSeconds (gainRampDurationSeconds);
-    highGainProcessor.prepare (spec);
     highGainProcessor.setGainDecibels (highLevelDb->load (std::memory_order_relaxed));
+    highGainProcessor.prepare (spec);
 
     // Post-sum 4-band EQ.
     eq.prepare (spec);

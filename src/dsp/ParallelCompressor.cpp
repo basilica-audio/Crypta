@@ -9,11 +9,19 @@ namespace
 
 namespace cryp
 {
-    void ParallelCompressor::prepare (const juce::dsp::ProcessSpec& spec, float initialWetMixProportion01)
+    void ParallelCompressor::prepare (const juce::dsp::ProcessSpec& spec,
+                                       float initialWetMixProportion01,
+                                       float initialMakeupGainDb)
     {
         compressor.prepare (spec);
         detector.prepare (spec);
+
+        // Issue #98: the makeup value goes in BEFORE prepare(), which is what
+        // makes prepare()'s internal reset() snap the smoother to it instead
+        // of leaving it to ramp up from a default-constructed silence. Same
+        // ordering requirement as the mixer below, same JUCE 8.0.14 cause.
         makeupGain.setRampDurationSeconds (makeupGainRampDurationSeconds);
+        makeupGain.setGainDecibels (initialMakeupGainDb);
         makeupGain.prepare (spec);
 
         // Prime the mix *before* prepare() so the mixer's internal reset()

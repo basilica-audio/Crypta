@@ -48,21 +48,15 @@
 //      it is the one that catches control state prepareToPlay() fails to
 //      re-arm.
 //
-// What this file deliberately does NOT assert: that a freshly constructed
-// instance renders the same first block as a re-prepared one. It does not,
-// and the difference is real - juce::dsp::Gain::prepare() snaps its smoother
-// to whatever target the object is holding, and prepareToPlay() prepares the
-// five cascaded gain stages (and the low-band compressor's makeup gain)
-// BEFORE telling them the session's value, so a freshly constructed instance
-// ramps up from silence across its first 20 ms while a re-prepared one starts
-// at level. Measured at a -13.5 dB null with a 0.485 peak difference on an
-// otherwise neutral chain. It is left alone here on purpose: no host renders
-// into a never-prepared instance (both sides of a real bounce-vs-playback
-// comparison are re-prepared, so both are at level), and correcting the
-// priming order changes the first 20 ms of every render - which the committed
-// v0.2.0 golden fixtures encode. Regenerating those is documented in
-// tests/GoldenRenderTests.cpp as a deliberate, reviewed act, and it is not
-// this change's to take.
+// A fourth thing this file used to say it deliberately did NOT assert - that
+// a freshly constructed instance renders the same as a re-prepared one - is
+// now asserted, because issue #98 fixed the reason it could not be.
+// juce::dsp::Gain::prepare() snaps its smoother to whatever target the object
+// is holding, and prepareToPlay() prepared the five cascaded gain stages (and
+// the low-band compressor's makeup gain) BEFORE telling them the session's
+// value, so a fresh instance ramped up from silence across its first 20 ms
+// while a re-prepared one started at level: -13.5 dB null, 0.485 peak
+// difference. prepareToPlay() now primes every one of them first.
 //
 // On tolerance: bit-exact, no epsilon, wherever bit-exactness is attainable -
 // which is the only defensible default for a deterministic DSP path, since
@@ -729,6 +723,212 @@ TEST_CASE ("Offline vs realtime: the host's real bounce sequence, knob move incl
 }
 
 //==============================================================================
+TEST_CASE ("Offline vs realtime: a freshly constructed instance renders exactly what a re-prepared one does", "[offline-realtime][determinism][reset]")
+{
+    // Issue #98. This file used to state, in its header, that it deliberately
+    // did NOT assert this - because it was not true. A freshly constructed
+    // instance ramped up from silence across its first 20 ms where a
+    // re-prepared one started at level, measured at a -13.5 dB null with a
+    // 0.485 peak difference on an otherwise neutral chain.
+    //
+    // The cause was an ordering one: juce::dsp::Gain::prepare() snaps its
+    // smoother to whatever target the object is holding, a default-constructed
+    // one holds silence, and prepareToPlay() prepared the five cascaded gain
+    // stages (and the low-band compressor's makeup gain) BEFORE telling them
+    // the session's value. prepareToPlay() now primes every one of them first,
+    // so this is a contract rather than a caveat.
+    //
+    // Three preparation shapes, all of which a host can produce, all of which
+    // must render the identical audio:
+    //
+    //   once   - constructed, parameters restored, prepared, rendered. What an
+    //            offline bounce into a newly instantiated plugin does.
+    //   twice  - prepared a second time before rendering. What a host does
+    //            when it changes buffer size or sample rate before playing.
+    //   reset  - prepared, then reset() before a sample is processed. Hosts do
+    //            this, and a reset() that undid the priming would put the
+    //            artifact straight back.
+    //
+    // Bit-exact, no epsilon: nothing here is randomised or free-running, so a
+    // differing bit means the initial state of some stage still depends on how
+    // the instance was brought up.
+    enum class Preparation { once, twice, resetAfterPrepare };
+
+    const auto renderWith = [] (Preparation preparation,
+                                double sampleRate,
+                                const ParameterSet& parameters)
+    {
+        CryptaAudioProcessor processor;
+        processor.setPlayConfigDetails (2, 2, sampleRate, liveBlockSize);
+
+        for (const auto& parameter : parameters)
+            TestHelpers::setParameter (processor, parameter.id, parameter.plainValue);
+
+        processor.prepareToPlay (sampleRate, liveBlockSize);
+
+        if (preparation == Preparation::twice)
+            processor.prepareToPlay (sampleRate, liveBlockSize);
+        else if (preparation == Preparation::resetAfterPrepare)
+            processor.reset();
+
+        juce::AudioBuffer<float> rendered (2, renderSamples);
+        pump (processor, sampleRate, liveBlockSize,
+              fixedSchedule (renderSamples, liveBlockSize), &rendered);
+
+        return rendered;
+    };
+
+    for (const auto sampleRate : { 44100.0, 48000.0 })
+    {
+        for (const auto& set : engineSets())
+        {
+            const auto fresh = renderWith (Preparation::once, sampleRate, set.parameters);
+
+            for (const auto& [name, preparation] :
+                 { std::pair { "prepared twice", Preparation::twice },
+                   std::pair { "reset() before the first block", Preparation::resetAfterPrepare } })
+            {
+                const auto other = renderWith (preparation, sampleRate, set.parameters);
+                const auto result = nullAgainst (fresh, other);
+
+                INFO ("fresh vs " << name << " [" << sampleRate << " Hz, " << set.name
+                      << "]: " << describe (result));
+                CHECK (result.bitExact);
+            }
+        }
+    }
+}
+
+TEST_CASE ("Offline vs realtime: the very first block is at level, not ramping up from silence", "[offline-realtime][determinism][reset]")
+{
+    // Issue #98, stated as the audible property rather than as a null.
+    //
+    // The test above proves the three ways of bringing an instance up agree
+    // with each other. That alone would still pass if they all agreed on the
+    // WRONG behaviour - if the priming fix were reverted and every path ramped
+    // from silence together. This measures what a listener would notice: the
+    // level of the render's opening 20 ms against its own settled level.
+    //
+    // Deliberately not run on the engine parameter sets the rest of this file
+    // uses. Those engage the gate and the low-band compressor, and a
+    // compressor is precisely the thing that hides a level ramp - it pulls the
+    // settled level down towards the ramped one, which turned a 6 dB defect
+    // into a 1.6 dB reading and left no room between "broken" and "fixed". The
+    // configuration below is chosen to make the gain stages the only thing
+    // moving: gate off, compressor mixed fully dry, Graaawl off, no drive, no
+    // EQ, no clip - with a deliberately non-zero value on every one of the
+    // five juce::dsp::Gain stages, because it is the smoother's *starting*
+    // point that was wrong, not its target, so even a stage sitting at 0 dB
+    // used to ramp up from silence.
+    constexpr double sampleRate = 48000.0;
+    constexpr int rampWindowSamples = static_cast<int> (0.02 * sampleRate);
+    constexpr int settledWindowStart = static_cast<int> (0.20 * sampleRate);
+
+    const ParameterSet neutralWithTrims {
+        { ParamIDs::inputGain, 3.0f },
+        { ParamIDs::outputGain, -2.0f },
+        { ParamIDs::lowLevel, 2.0f },
+        { ParamIDs::midLevel, -3.0f },
+        { ParamIDs::highLevel, 1.5f },
+        { ParamIDs::lowCompMakeup, 4.0f },
+
+        { ParamIDs::bypass, 0.0f },
+        { ParamIDs::gateEnabled, 0.0f },
+        { ParamIDs::lowCompMix, 0.0f },
+        { ParamIDs::lowGrowl, 0.0f },
+        { ParamIDs::midDrive, 0.0f },
+        { ParamIDs::highDrive, 0.0f },
+        { ParamIDs::highBlend, 0.0f },
+        { ParamIDs::eqEnabled, 0.0f },
+        { ParamIDs::outputClip, 0.0f },
+        { ParamIDs::irEnabled, 0.0f },
+    };
+
+    const auto windowRms = [] (const juce::AudioBuffer<float>& buffer, int start, int length)
+    {
+        double sumOfSquares = 0.0;
+
+        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+            for (int sample = start; sample < start + length; ++sample)
+                sumOfSquares += static_cast<double> (buffer.getSample (channel, sample))
+                                * static_cast<double> (buffer.getSample (channel, sample));
+
+        return std::sqrt (sumOfSquares / static_cast<double> (length * buffer.getNumChannels()));
+    };
+
+    for (const auto engineIndex : { 0, 1 }) // Classic, Circuit
+    {
+        INFO ("drive engine " << engineIndex);
+
+        CryptaAudioProcessor processor;
+        processor.setPlayConfigDetails (2, 2, sampleRate, liveBlockSize);
+
+        for (const auto& parameter : neutralWithTrims)
+            TestHelpers::setParameter (processor, parameter.id, parameter.plainValue);
+
+        TestHelpers::setParameter (processor, ParamIDs::driveEngine, static_cast<float> (engineIndex));
+
+        processor.prepareToPlay (sampleRate, liveBlockSize);
+
+        // A steady tone, not the burst programme the rest of the file uses:
+        // with a constant-amplitude input, any difference between the two
+        // windows below is the plugin's own gain trajectory and nothing else.
+        juce::AudioBuffer<float> rendered (2, renderSamples);
+        juce::AudioBuffer<float> block (2, liveBlockSize);
+        juce::MidiBuffer midi;
+
+        for (int offset = 0; offset < renderSamples; offset += liveBlockSize)
+        {
+            const auto length = juce::jmin (liveBlockSize, renderSamples - offset);
+            block.setSize (2, length, false, false, true);
+
+            for (int channel = 0; channel < 2; ++channel)
+                for (int sample = 0; sample < length; ++sample)
+                    block.setSample (channel, sample,
+                                      0.4f * static_cast<float> (std::sin (
+                                          juce::MathConstants<double>::twoPi * 110.0
+                                          * static_cast<double> (offset + sample) / sampleRate)));
+
+            processor.processBlock (block, midi);
+
+            for (int channel = 0; channel < 2; ++channel)
+                rendered.copyFrom (channel, offset, block, channel, 0, length);
+        }
+
+        const auto opening = windowRms (rendered, 0, rampWindowSamples);
+        const auto settled = windowRms (rendered, settledWindowStart, rampWindowSamples);
+
+        REQUIRE (settled > 1.0e-3);
+
+        const auto differenceDb = juce::Decibels::gainToDecibels (opening / settled);
+
+        INFO ("opening 20 ms " << opening << ", settled " << settled
+              << ", difference " << differenceDb << " dB");
+
+        // Measured with the priming fix in place: -1.3230 dB (Classic) and
+        // -1.3231 dB (Circuit). Reverting the fix and changing nothing else:
+        // -13.5006 dB and -13.0543 dB, because five cascaded gain stages each
+        // ramping from silence multiply.
+        //
+        // The -1.32 dB that remains is not a gain ramp, and that is a
+        // structural argument rather than a measurement: with the fix, every
+        // smoother is snapped to its target inside prepare(), so there is no
+        // gain trajectory left to observe. What is left is the chain's own
+        // startup - the 61 samples of reported latency the render opens with,
+        // and the LR4 splits and phase-align allpass settling on a 110 Hz tone
+        // against a 120 Hz split. The two drive engines agreeing to four
+        // decimal places says the same thing: the residue belongs to the
+        // shared front end, not to either engine.
+        //
+        // 4 dB is therefore the bar: 2.7 dB above the settled behaviour and
+        // 9 dB below the defect, with the measurement deterministic run to run
+        // so the only thing that moves it is a real change. A tighter bar
+        // would be measuring the crossover's startup rather than the thing
+        // this test is about.
+        CHECK (std::abs (differenceDb) < 4.0);
+    }
+}
+
 TEST_CASE ("Offline vs realtime: the cab-sim convolution is the one stage that cannot be bit-exact, and it is one ULP", "[offline-realtime][determinism][ir]")
 {
     // The exclusion, stated with numbers rather than hidden in an epsilon.
