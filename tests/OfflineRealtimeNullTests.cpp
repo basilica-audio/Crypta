@@ -74,11 +74,14 @@
 //   - The cab-sim convolution, which is switched off for the cases that
 //     assert bit-exactness and gets its own test case at the bottom of this
 //     file, measured at one ULP.
-//   - On Intel only, juce::dsp's snap-to-zero denormal guard, which is a
-//     genuine per-callback block-size dependence rather than a rounding
-//     artefact. See blockScheduleContract() below for the mechanism, the
-//     evidence, and why the bound is where it is. The bit-exact contract is
-//     NOT weakened on Apple Silicon, where it is proven and holds.
+//
+// There used to be a second one: on Intel, juce::dsp's snap-to-zero denormal
+// guard made the render genuinely depend on the host's buffer size, and this
+// file bounded it rather than fixing it. Issue #99 fixed it -
+// CMakeLists.txt sets JUCE_DSP_ENABLE_SNAP_TO_ZERO=0 - so the contract below
+// is now bit-exact on every architecture with no exception. The mechanism and
+// the measurements are kept at checkSameAudioDifferentlyBuffered() because
+// they are what justifies the flag.
 //
 // On timing: nothing in this file waits, sleeps, or measures wall-clock time.
 // That is a requirement of the test, not a convenience - a null test with a
@@ -437,95 +440,54 @@ namespace
     }
 
     //==========================================================================
-    // The contract for "the same audio, buffered differently".
+    // The contract for "the same audio, buffered differently": bit-exact,
+    // on every architecture, unconditionally.
     //
-    // On Apple Silicon this is bit-exact and stays bit-exact. On Intel it
-    // cannot be, and the reason is a real block-size dependence rather than a
-    // rounding artefact - which matters, because the two call for different
-    // responses and only one of them justifies a bound.
+    // It was not always unconditional. Until issue #99 was closed this file
+    // carried a second, looser contract for Intel targets, because on Intel
+    // the render genuinely depended on the host's buffer size. The mechanism
+    // and the evidence are kept here because they are the justification for
+    // the build flag that removed it, and because a future reader who turns
+    // that flag back on needs to find this rather than rediscover it:
     //
-    // The mechanism: juce::dsp zeroes a filter's internal state at the END of
-    // every process() call whenever its magnitude has fallen below 1e-8
-    // (JUCE 8.0.14, juce_dsp.h's util::snapToZero(), called once per call by
+    // juce::dsp zeroed a filter's internal state at the END of every
+    // process() call whenever its magnitude had fallen below 1e-8 (JUCE
+    // 8.0.14, juce_dsp.h's util::snapToZero(), called once per call by
     // LinkwitzRileyFilter::process(), IIR::Filter::process(),
     // Oversampling::processSamplesUp()/Down() and BallisticsFilter::process()
     // - i.e. by both crossover splits, the phase-align allpass, the post-sum
-    // EQ and every oversampled drive stage, which is why both engines are
-    // affected and not only the Circuit one). JUCE_SNAP_TO_ZERO is defined as
-    // a no-op on non-Intel targets (juce_FloatVectorOperations.h: the macro is
-    // #if JUCE_INTEL), so on Apple Silicon nothing snaps and the state
-    // trajectory is a pure function of the input. On Intel the snap events
-    // land exactly on the host's block boundaries, so where the boundaries
-    // are changes the state, and the render genuinely differs.
+    // EQ and every oversampled drive stage, which is why both engines were
+    // affected and not only the Circuit one). JUCE_SNAP_TO_ZERO is a no-op on
+    // non-Intel targets (juce_FloatVectorOperations.h: the macro is
+    // #if JUCE_INTEL), so Apple Silicon was already bit-exact; on Intel the
+    // snap events landed exactly on the host's block boundaries, so where the
+    // boundaries were changed the state, and the render differed. Worst case
+    // -75.90 dB / 1.3437e-03 peak on macOS x86_64 against -75.73 dB /
+    // 1.3427e-03 on windows-latest - two compilers, two operating systems,
+    // agreeing to 0.2 dB, which is what ruled out MSVC codegen as the cause -
+    // and the first differing sample for the 512-versus-32 Classic case was
+    // sample 32 exactly.
     //
-    // The evidence that this is architecture and not toolchain - MSVC FP
-    // contraction was the first suspicion and it is wrong:
+    // CMakeLists.txt now sets JUCE_DSP_ENABLE_SNAP_TO_ZERO=0, which removes
+    // the snapping entirely and restores bit-exactness. Denormal protection
+    // is not lost with it: processBlock() installs juce::ScopedNoDenormals,
+    // which puts the FPU itself in flush-to-zero / denormals-are-zero mode for
+    // the whole callback, so every arithmetic result is flushed rather than
+    // only the filter state juce::dsp chose to snap. See the flag's comment in
+    // CMakeLists.txt, the preprocessor interlock at the top of
+    // src/PluginProcessor.cpp, and "Denormals: nothing denormal survives a
+    // decay to silence" in tests/RobustnessTests.cpp.
     //
-    //   - Building THIS repository for x86_64 with the same Apple clang, on
-    //     the same machine, and running it under Rosetta reproduces the
-    //     Windows/MSVC failures configuration for configuration: worst case
-    //     -75.90 dB / 1.3437e-03 peak locally against -75.73 dB / 1.3427e-03
-    //     on windows-latest. Two different compilers and two different
-    //     operating systems agreeing to 0.2 dB is not a codegen difference.
-    //   - Rebuilding that same x86_64 binary with JUCE_DSP_ENABLE_SNAP_TO_ZERO
-    //     set to 0, changing nothing else, restores bit-exactness on all 8017
-    //     assertions in this file. One flag, one mechanism.
-    //   - The first differing sample lands on a block boundary: for the
-    //     512-versus-32 Classic case it is sample 32 exactly.
-    //
-    // Why a bound rather than a fix here: switching the guard off is a
-    // one-line JUCE module flag, it is safe in this plugin's audio path
-    // (processBlock() installs juce::ScopedNoDenormals, so the CPU already
-    // flushes denormals and the guard is redundant there), and it is proven
-    // above to work - but it changes the audio the shipped Intel binary
-    // produces, which is a product decision and not a test's to take. It is
-    // written up on the pull request as a recommended follow-up.
-    //
-    // Why the bound is where it is:
-    //   - -60 dB is the bar tests/GoldenRenderTests.cpp already sets for the
-    //     same class of platform split, for the same stated reason.
-    //   - It sits 15.7 dB below the worst figure measured on either Intel
-    //     toolchain, so it is not a number chosen to make a red run go green -
-    //     the measurement came first and has 15.7 dB of room.
-    //   - It sits 24 dB below the smallest genuine defect this file has
-    //     actually caught (the CircuitDrive block-size dependence, -36.2 dB),
-    //     so nothing of that class can hide behind it.
-    //   - The peak bound is a second, independent axis: an energy bound alone
-    //     cannot see a single-sample excursion. 1.0e-2 is 7.4x the worst peak
-    //     measured on either Intel toolchain (1.3437e-03).
-    //
-    // The condition below tracks JUCE_DSP_ENABLE_SNAP_TO_ZERO deliberately, so
-    // that the day the guard is switched off this contract tightens back to
-    // bit-exact by itself instead of quietly staying loose.
-   #if JUCE_INTEL && JUCE_DSP_ENABLE_SNAP_TO_ZERO
-    constexpr auto blockScheduleIsBitExact = false;
-    constexpr double intelSnapNullBoundDb = -60.0;
-    constexpr double intelSnapPeakBound = 1.0e-2;
-   #else
-    constexpr auto blockScheduleIsBitExact = true;
-   #endif
-
-    // Applies whichever of the two contracts this target is entitled to.
+    // Measured after the flag, on the same macOS x86_64 binary that produced
+    // the figures above: all 8017 assertions in this file bit-exact.
     void checkSameAudioDifferentlyBuffered (const NullResult& result)
     {
-        if constexpr (blockScheduleIsBitExact)
-        {
-            CHECK (result.bitExact);
-        }
-        else
-        {
-           #if JUCE_INTEL && JUCE_DSP_ENABLE_SNAP_TO_ZERO
-            CHECK (result.nullDepthDb <= intelSnapNullBoundDb);
-            CHECK (result.maxAbsoluteDifference <= intelSnapPeakBound);
-           #endif
-        }
+        CHECK (result.bitExact);
     }
 
     const char* contractName()
     {
-        return blockScheduleIsBitExact
-                   ? "contract: bit-exact"
-                   : "contract: Intel snap-to-zero bound (<= -60 dB, <= 1.0e-2 peak)";
+        return "contract: bit-exact";
     }
 
     // Not a multiple of any block size used below (32, 441, 480, 512, 1024),
@@ -568,6 +530,27 @@ namespace
         return { { "Circuit engine", circuitEverythingEngaged() },
                  { "Classic engine", classicEverythingEngaged() } };
     }
+}
+
+//==============================================================================
+TEST_CASE ("Offline vs realtime: juce::dsp's block-boundary state snapping stays off", "[offline-realtime][determinism][denormals]")
+{
+    // Issue #99. Every bit-exact contract in this file rests on one build
+    // flag, and a flag is easy to lose in a merge, a JUCE bump or a
+    // well-meaning "restore the JUCE defaults" cleanup. Without this case the
+    // symptom would be several dozen failing null assertions with no
+    // explanation attached to any of them; with it, the first thing the
+    // report says is which flag moved and why it matters.
+    //
+    // It is checked here rather than only at the point of use because it is a
+    // property of the build, not of any one render: with the guard on, the
+    // plugin's output depends on the host's buffer size on Intel, which means
+    // an offline bounce at 512 does not match realtime monitoring at 128 -
+    // exactly what the rest of this file exists to disprove.
+    INFO ("JUCE_DSP_ENABLE_SNAP_TO_ZERO = " << JUCE_DSP_ENABLE_SNAP_TO_ZERO
+          << " (must be 0 - see CMakeLists.txt and issue #99; denormals are handled by "
+             "juce::ScopedNoDenormals in processBlock(), not by state-zeroing at call boundaries)");
+    CHECK (JUCE_DSP_ENABLE_SNAP_TO_ZERO == 0);
 }
 
 //==============================================================================

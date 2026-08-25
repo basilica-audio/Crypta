@@ -127,6 +127,36 @@ target_compile_definitions(SharedCode INTERFACE
     JUCE_VST3_CAN_REPLACE_VST2=0
     # AGPLv3 usage permits disabling the splash screen.
     JUCE_DISPLAY_SPLASH_SCREEN=0
+    # Issue #99: juce::dsp's per-call denormal guard makes the render depend
+    # on the host's buffer size on Intel, and it is redundant here.
+    #
+    # util::snapToZero() (JUCE 8.0.14, juce_dsp/juce_dsp.h) zeroes a filter's
+    # internal state at the END of every process() call once its magnitude
+    # falls below 1e-8, and it is called once per call by
+    # LinkwitzRileyFilter, IIR::Filter, Oversampling and BallisticsFilter -
+    # i.e. by both crossover splits, the phase-align allpass, the post-sum EQ
+    # and every oversampled drive stage. The snap events therefore land on the
+    # host's block boundaries: move the boundaries and the state trajectory,
+    # and so the output, changes. JUCE_SNAP_TO_ZERO is `#if JUCE_INTEL`
+    # (juce_audio_basics/buffers/juce_FloatVectorOperations.h), so this was an
+    # Intel-only property - an offline bounce at 512 did not match realtime
+    # monitoring at 128 on an Intel machine, while an Apple Silicon build of
+    # the same source was bit-exact. Measured before this flag: -75.9 dB /
+    # 1.3e-03 peak worst case, agreeing to 0.2 dB between MSVC on Windows and
+    # Apple clang on macOS x86_64, which is what ruled out codegen.
+    #
+    # Denormal protection is NOT removed by switching the guard off - it moves
+    # from state-zeroing at call boundaries to the FPU, which is both stronger
+    # and free. CryptaAudioProcessor::processBlock() opens with
+    # juce::ScopedNoDenormals, which sets MXCSR FTZ|DAZ (mask 0x8040) on Intel
+    # and FPCR FZ on ARM for the whole callback and restores the host's own
+    # mode on the way out, so every arithmetic result is flushed rather than
+    # only the filter state juce::dsp happens to snap. No DSP in this plugin
+    # runs outside that scope: processBlockBypassed() is JUCE's default, which
+    # performs no arithmetic. src/PluginProcessor.cpp carries a static_assert
+    # tying the two together, so this flag cannot be set on a target where
+    # ScopedNoDenormals is a no-op.
+    JUCE_DSP_ENABLE_SNAP_TO_ZERO=0
 )
 
 target_link_libraries(SharedCode INTERFACE
