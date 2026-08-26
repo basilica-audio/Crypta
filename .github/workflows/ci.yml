@@ -23,7 +23,13 @@ jobs:
         os: [macos-latest, windows-latest]
         include:
           - os: macos-latest
-            timeout: 30
+            # 30 before the x86_64 slice step was added (issue #104). That step
+            # measured 2.95 min on the runner against a 12.4 min job, and it
+            # carries its own 15-minute step timeout; 35 keeps the job's bound
+            # meaningful rather than letting the step's bound become the real
+            # one. The build step alone has been observed between 6.8 and 9.1
+            # min for the same tree, so the headroom is not slack.
+            timeout: 35
           - os: windows-latest
             timeout: 35
 
@@ -83,9 +89,37 @@ jobs:
         if: runner.os == 'Windows'
         run: cmake --build build --config Release
 
-      - name: Test (macOS)
+      - name: Test (macOS, arm64 slice)
+        # ctest runs the Universal Binary, and macOS picks the slice matching
+        # the host - so this is the arm64 slice, on every GitHub-hosted macOS
+        # runner. Named accordingly, because for the whole life of this
+        # workflow it read as "the macOS tests" while covering half of what
+        # macOS ships (issue #104).
         if: runner.os == 'macOS'
         run: ctest --test-dir build --output-on-failure
+
+      - name: Test (macOS, x86_64 slice under Rosetta)
+        # The other half. -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" above already
+        # compiled and linked this code; until now nothing ever executed it, and
+        # both defects fixed in PR #102 (#99 block-size-dependent render on
+        # Intel, #100 an architecture gate written as JUCE_MAC) were found only
+        # because someone built for x86_64 and ran it under Rosetta by hand.
+        #
+        # It is a step in this job rather than a job of its own on purpose. The
+        # object code already exists here, so the added cost is the test runtime
+        # alone; a separate macos-*-intel runner would add a second checkout,
+        # CPM restore and ~7-minute Universal build to buy the same assertions,
+        # on the most expensive minute in the fleet (macOS is billed at 10x).
+        # Genuine Intel silicon is covered by windows-latest, which runs the
+        # whole suite on real x86_64 hardware and is what proved #99's fix.
+        #
+        # The script asserts the slice exists, that Rosetta is present, that the
+        # child really was translated, and that both slices register the same
+        # 257 test cases before running any of them - see its header.
+        if: runner.os == 'macOS'
+        timeout-minutes: 15
+        shell: bash
+        run: .github/scripts/run-macos-x86_64-slice.sh build/Tests
 
       - name: Test (Windows)
         if: runner.os == 'Windows'
