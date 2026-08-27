@@ -109,6 +109,13 @@ to `build/gui-preview.png` (`tests/gui/GuiPreviewSnapshotTests.cpp`); that file
 is what is committed as [`docs/gui-preview.png`](docs/gui-preview.png). See
 [`docs/branding.md`](docs/branding.md#gui-preview) for the convention.
 
+## Documentation
+
+- [`docs/manual.md`](docs/manual.md) — the user manual: what every control does, and how to use it
+- [`docs/presets.md`](docs/presets.md) — what each factory preset is for
+- [`CHANGELOG.md`](CHANGELOG.md) — what shipped in each release
+- [Crypta on basilica-audio.github.io](https://basilica-audio.github.io/website/crypta/) — the product page (English and German)
+
 ## Installation
 
 Download the archive for your platform from the [Releases](../../releases) page and copy the bundles into the standard plugin locations. Each archive ships with a `.sha256` file, so a download can be verified with `shasum -a 256 -c <asset>.sha256`.

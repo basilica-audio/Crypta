@@ -48,6 +48,10 @@ juce_add_plugin(Crypta
     PLUGIN_CODE Cryp
     FORMATS AU VST3 Standalone
     PRODUCT_NAME "Crypta"
+    COMPANY_WEBSITE "https://basilica-audio.github.io/website/"
+    COMPANY_COPYRIGHT "Copyright (c) 2026 Yves Vogl"
+    DESCRIPTION "Three-band bass processor: low-band compression, mid saturation, high-band fuzz"
+    VST3_CATEGORIES Fx Distortion Dynamics
     COPY_PLUGIN_AFTER_BUILD TRUE
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
