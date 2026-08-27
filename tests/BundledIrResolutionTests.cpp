@@ -120,7 +120,7 @@ namespace
         PresetManagerConfig config;
         config.pluginId = "com.yvesvogl.crypta";
         config.pluginName = "Crypta";
-        config.manufacturerName = "Yves Vogl";
+        config.manufacturerName = "Basilica Audio";
         config.pluginVersion = "0.3.0-test";
         config.userPresetsDirectoryOverrideForTests = userPresetDir;
         return config;
