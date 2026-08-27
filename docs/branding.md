@@ -1,82 +1,60 @@
-# Branding & visual assets
+# Branding: which name appears where
 
-Crypta's visual identity, where the master files live, and which paths the
-README and the docs are wired to. Everything here is self-made, so it is
-license-clean under the repo's AGPLv3 (see
-[`docs/adr/0002-agplv3-licensing.md`](adr/0002-agplv3-licensing.md)).
+Crypta is part of the **Basilica Audio** plugin suite. Two names are in play, and they are not
+interchangeable: *Basilica Audio* is the trading name the suite is sold under, *Yves Vogl* is the
+legal person who holds the copyright. This file records which one each identifier carries, and why
+some of them deliberately still say the old thing.
 
-## Plugin icon
+The suite-level decision is
+[ADR 0001](https://github.com/basilica-audio/.github/blob/main/docs/adr/0001-suite-vendor-identity.md)
+in `basilica-audio/.github`, answering
+[basilica-audio/.github#2](https://github.com/basilica-audio/.github/issues/2).
 
-The icon is the plugin's badge: it is the README header image, the manual's
-header image, and the artwork used for the Basilica Audio suite listing.
+## What a user sees
 
-| Property | Value |
-|---|---|
-| Motif | A gold serpent coiled around a bass clef |
-| Treatment | Antique-gold bas-relief emblem on a flat near-black squircle (ICON-DIREKTIVE v3, "flat squircle" — no glass dish, no rim) |
-| Committed at | [`docs/assets/icon.png`](assets/icon.png) (1024×1024, RGBA) and [`docs/assets/icon-256.png`](assets/icon-256.png) (256×256, RGBA) |
-| Suite master | `brand/v3-flat/final/crypta.png` / `crypta_256.png` in the suite working tree |
-| Landed in | #70 (`docs(branding): v3 flat squircle icon`), superseding the v2 "plastic" set |
+| Surface | Value | Set in |
+| --- | --- | --- |
+| DAW vendor column / plugin-manager grouping | **Basilica Audio** | `COMPANY_NAME`, `CMakeLists.txt` |
+| Audio Unit `name` string | **Basilica Audio: Crypta** | derived from `COMPANY_NAME` + `PRODUCT_NAME` |
+| VST3 vendor field | **Basilica Audio** | derived from `COMPANY_NAME` |
+| Copyright notice (`NSHumanReadableCopyright`) | **Copyright (c) 2026 Yves Vogl** | `COMPANY_COPYRIGHT`, `CMakeLists.txt` |
+| User preset folder (macOS) | `~/Library/Audio/Presets/Basilica Audio/Crypta/` | `PresetManagerConfig::manufacturerName` |
+| User preset folder (Windows) | `%APPDATA%\Basilica Audio\Crypta\Presets\` | same |
 
-The two committed files are byte-identical copies of the suite masters
-(md5-verified) — the repo carries its own copies so a clone is
-self-contained, while the suite `brand/` tree stays the single place where
-the icon is regenerated.
+## What stays on the old name, on purpose
 
-The motif predates the rename from *Twist Your Guts* to *Crypta*. It was kept
-deliberately: a serpent coiled around a bass clef reads as the low-end
-foundation of the basilica either way.
+| Identifier | Value | Why it does not move |
+| --- | --- | --- |
+| `BUNDLE_ID` | `com.yvesvogl.crypta` | A host recognises a plugin across sessions by its bundle ID. Changing it makes every existing project treat this as a *different* plugin and lose its instance. Nothing a user sees flows from it, so there is no benefit to weigh against that. |
+| Preset JSON `plugin` field | `com.yvesvogl.crypta` | The same string. Freezing it keeps every preset file ever written importable, including ones exported by older builds and shared between users. |
+| `COMPANY_COPYRIGHT` | `Copyright (c) 2026 Yves Vogl` | A trading name is not a copyright holder. Aligning this to the brand would make the notice less accurate, not more consistent. |
 
-### Palette
+`PLUGIN_MANUFACTURER_CODE` stays `Yvsv` and `PLUGIN_CODE` is unchanged, which is what makes the
+`COMPANY_NAME` move safe: the VST3 class ID derives from those two alone (JUCE 8.0.14,
+`juce_VST3ModuleInfo.h`, `VST3Interface::jucePluginId`), and the Audio Unit identity triple is
+`(aufx, <PLUGIN_CODE>, Yvsv)`. Neither changed, so a session saved with an older build still
+resolves to this plugin.
 
-Sampled from the committed icon. The GUI work should treat these as the
-anchor values rather than re-deriving them.
+**Do not "finish the rename".** The values in the second table are decisions, not leftovers. The
+`CMakeLists.txt` entries carry the same warning at the definition.
 
-| Role | Value |
-|---|---|
-| Plate | `#000000` – `#202020` (flat near-black, ~70 % of the badge area) |
-| Emblem, shadow side | `#302010` |
-| Emblem, mid tone | `#504020` – `#605030` |
-| Emblem, lit side | `#806040` – `#A08050` |
+## What happened to presets saved before the rename
 
-## GUI preview
+Presets used to live under `~/Library/Audio/Presets/Yves Vogl/Crypta/` (macOS) and
+`%APPDATA%\Yves Vogl\Crypta\Presets\` (Windows). Nothing there is lost:
 
-The suite convention — established by Silentium, which shipped the first
-custom editor — is a single rendered preview at **`docs/gui-preview.png`**.
-Silentium references it from the CHANGELOG entry of the release that
-introduced the GUI; Crypta's README additionally reserves the path, so the
-image has one documented home rather than being linked ad hoc.
+- On the first launch after updating, `PresetManager` **copies** every `.basilicapreset` file from
+  the old folder into the new one.
+- It **never moves or deletes** the originals, so an older build of Crypta - or a downgrade -
+  still finds its presets exactly where it left them.
+- It **never overwrites** a file already present under the new name. A preset you saved after the
+  update always wins over an older file of the same name.
+- It is idempotent, and on a machine that never had the old folder it costs one filesystem check.
 
-The preview is **generated, never mocked up**: Silentium's GUI test suite
-takes an offscreen snapshot of the real editor, writes it to
-`build/gui-preview.png`, asserts it is non-blank, and that file is what gets
-committed as `docs/gui-preview.png`. Crypta now follows the same route:
-`tests/gui/GuiPreviewSnapshotTests.cpp` renders the editor through
-`Component::createComponentSnapshot()`, checks the result is not a flat fill,
-and writes the PNG next to the test binary. Nothing under that name is ever
-hand-made — a mockup committed there would be indistinguishable from a real
-screenshot the moment anyone linked to it.
+The old folder is never cleaned up automatically. Deleting a user's files to tidy up a folder name
+is not a trade this project makes; remove it by hand if you want it gone.
 
-Companion docs Silentium carries alongside the preview, worth mirroring when
-Crypta's editor lands:
-
-- `docs/gui-mapping.md` — which APVTS parameter each physical control drives (**present**)
-- `docs/gui-components.md` — component architecture of the editor. Crypta keeps
-  this in [`architecture.md`](architecture.md#gui-vector-editor) instead of a
-  separate file, so the GUI is described in the same place as the DSP it
-  drives rather than drifting in a second document.
-
-## Archived logo drafts
-
-Two earlier standalone logo directions exist as history only, on the unmerged
-`feat/branding` branch under `assets/logo/`:
-
-- `logo-badge-v1-metalcore.svg` / `logo-lockup-v1-metalcore.svg` — v1
-  "metalcore molten", rejected
-- `logo-badge-v2-blackmetal.svg` / `logo-lockup-v2-blackmetal.svg` — v2
-  black-metal thorned sigil, approved 2026-07-14
-
-Both carry the pre-rename *Twist Your Guts* wordmark and predate the v3 icon
-direction, so neither is wired into the README. They are kept on the branch
-as design history; the v3 squircle icon is the current and only shipped brand
-mark.
+`tests/PresetManagerTests.cpp` pins all of this: a preset written under the legacy layout still
+loads, the migration does not overwrite a newer file, an overridden test directory never reaches
+the real preset folder, and both folder shapes match the platform convention - the last of those
+asserted on macOS and Windows CI, not just on a developer's machine.

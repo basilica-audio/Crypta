@@ -63,8 +63,8 @@ No absolute sample count is pinned as a constant in this manual - check your hos
 
 Crypta ships with a preset system: a horizontal bar at the top of the plugin window lets you step through factory and user presets (`<` / preset name / `>`), save/save-as/delete your own, and import/export single presets or preset banks (zip files of multiple presets). Nine factory presets ship in v0.2.0 — see `docs/presets.md` for what each one demonstrates. User presets are stored per-plugin under:
 
-- **macOS**: `~/Library/Audio/Presets/Yves Vogl/Crypta/`
-- **Windows**: `%APPDATA%\Yves Vogl\Crypta\Presets\`
+- **macOS**: `~/Library/Audio/Presets/Basilica Audio/Crypta/`
+- **Windows**: `%APPDATA%\Basilica Audio\Crypta\Presets\`
 
 A fresh instance loads a user "Default" preset if you've saved one ("Set current as default" in the preset menu), otherwise the factory "Default" preset (matching the plain parameter defaults documented below).
 
