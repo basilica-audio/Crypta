@@ -56,15 +56,25 @@ namespace
         auto* lowCompMixParam = processor.apvts.getParameter (ParamIDs::lowCompMix);
         auto* midDriveParam = processor.apvts.getParameter (ParamIDs::midDrive);
         auto* highBlendParam = processor.apvts.getParameter (ParamIDs::highBlend);
+        auto* outputGainParam = processor.apvts.getParameter (ParamIDs::outputGain);
         REQUIRE (lowCompMixParam != nullptr);
         REQUIRE (midDriveParam != nullptr);
         REQUIRE (highBlendParam != nullptr);
+        REQUIRE (outputGainParam != nullptr);
 
         lowCompMixParam->setValueNotifyingHost (lowCompMixParam->convertTo0to1 (0.0f));
         // MidBand's 0% drive is an exact passthrough by construction (see
         // cryp::MidBand's class docs) - no separate blend control to zero.
         midDriveParam->setValueNotifyingHost (midDriveParam->convertTo0to1 (0.0f));
         highBlendParam->setValueNotifyingHost (highBlendParam->convertTo0to1 (0.0f));
+
+        // The startup state is the factory Default PRESET, not the parameter
+        // layout's defaults - and since the issue #34 item 1 trims, Default
+        // carries a -2.8 dB output trim so it no longer clips a nominally
+        // tracked DI. These tests are about the level-trim identities of a
+        // neutral chain, so the trim is pinned back to 0 dB explicitly, the
+        // same way the voicing stages above are pinned dry.
+        outputGainParam->setValueNotifyingHost (outputGainParam->convertTo0to1 (0.0f));
     }
 
     double measureSettledLevelDb (CryptaAudioProcessor& processor, double probeFrequencyHz)

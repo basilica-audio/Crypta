@@ -619,16 +619,26 @@ TEST_CASE ("Listening: every factory preset is load-and-play on a nominally trac
     //                 factor of ten in amplitude is not a tone preset, it is a
     //                 pad, and 20 dB is where a user would reach for the fader
     //                 rather than the preset browser.
-    //
-    // WHAT IS MEASURED AND DELIBERATELY NOT ASSERTED: whether the preset's peak
-    // stays under 0 dBFS. It is a real question - the input here is a bass DI at
-    // -12 dBFS peak, the level such a track is conventionally recorded at - and
-    // the measurement is recorded per preset below and in [.listening-table].
-    // But a plugin whose job is drive and makeup gain legitimately raises level,
-    // and where the channel fader ends up afterwards is gain staging, which is a
-    // voicing decision rather than a defect. Asserting it here would be this
-    // file deciding a question that belongs to Yves. The numbers are carried
-    // into the issue instead, as a fine-tune item, with the presets named.
+    //   NOT CLIPPING  at or below 0 dBFS on this DI. This one graduated from
+    //                 "measured, not asserted" to a gate (issue #34 item 1):
+    //                 the input is a bass DI at -12 dBFS peak, the level such
+    //                 a track is conventionally recorded at, so a factory
+    //                 preset that pushes it past full scale clips at the
+    //                 canonical level its own author must be assumed to have
+    //                 voiced for. That is a defect, not gain-staging taste -
+    //                 eight of the twelve shipped presets did it (worst:
+    //                 Clean Low, Loud Top at +3.52 dBFS) before each got a
+    //                 derived `outputGain` trim in presets/factory/*.json.
+    //                 The trims TARGET a peak of -0.3 dBFS on this fixture
+    //                 (headroom for float rounding and for the small drift a
+    //                 voicing tweak upstream may add); the ASSERTED line is
+    //                 0 dBFS, so the gate fails on reintroduced clipping, not
+    //                 on the first 0.1 dB of voicing drift. WHAT THIS
+    //                 DELIBERATELY DOES NOT DO is level-match the presets to
+    //                 each other - each trim removes exactly the overshoot of
+    //                 its own preset and nothing else, so every preset's
+    //                 internal voicing and relative loudness is untouched.
+    //                 Level-matching remains Yves' taste item in issue #34.
     constexpr double runawayCeiling = 4.0;
     constexpr double collapseDb = 20.0;
 
@@ -674,13 +684,19 @@ TEST_CASE ("Listening: every factory preset is load-and-play on a nominally trac
         CHECK (peak < runawayCeiling);
         CHECK (delta > -collapseDb);
 
-        if (peak > 1.0)
-        {
+        // The clipping gate (issue #34 item 1). The asserted line is 0 dBFS -
+        // a factory preset must not push the canonical -12 dBFS DI past full
+        // scale - while the shipped trims in presets/factory/*.json target
+        // -0.3 dBFS on this exact fixture, so there is 0.3 dB of headroom
+        // between "the voicing drifted" and "this gate goes red". A preset
+        // that fails here is asking the user to pull the fader before they
+        // can audition it, which is a defect and not taste - the taste half
+        // (level-MATCHING the presets to each other) is deliberately not
+        // gated and remains in issue #34.
+        if (peak >= 1.0)
             ++overFullScale;
-            WARN (entry.name << ": peaks at " << peakDb
-                   << " dBFS on a -12 dBFS DI (level change " << delta
-                   << " dB) - measured, not gated, see the case comment");
-        }
+
+        CHECK (peak < 1.0);
     }
 
     // Twelve factory presets ship (CMakeLists.txt's juce_add_binary_data list).
@@ -689,6 +705,7 @@ TEST_CASE ("Listening: every factory preset is load-and-play on a nominally trac
     INFO ("factory presets exercised: " << factoryCount
           << ", of which over 0 dBFS on a -12 dBFS DI: " << overFullScale);
     CHECK (factoryCount == 12);
+    CHECK (overFullScale == 0);
 }
 
 TEST_CASE ("Listening: the four bundled cabinets are plausible bass cabinets, and they are four different ones",

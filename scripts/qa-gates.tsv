@@ -40,4 +40,4 @@ continuous-sweep	[continuous-sweep]	(sweep max step|static worst|peak under simu
 state-recall-render	[recall-render]	(differing samples|settled RMS|restore transient|wrote)	A reopened session renders BIT-IDENTICALLY to the session that saved it, at every parameter edge
 rate-invariance	[invariance]	(deviation|transfer|reduction|gain reduction)	The same musical result at 44.1/48/88.2/96/192 kHz: magnitude response, harmonic profile, ballistics
 adversarial	[adversarial]	(peak|reported latency|clean RMS)	Full-scale, DC, impulse, silence, Nyquist, denormal and NaN input, plus mid-stream rate and block-size changes
-listening-proxy	[listening]	(modulation|openings|lost|spread|peaks at|-10 dB band|at 8 kHz|level change|undriven)	The taste gate, measured: detector tremolo, gate chatter, drive-vs-level, preset gain staging, cabinet plausibility
+listening-proxy	[listening]	(modulation|openings|lost|spread|-10 dB band|at 8 kHz|level change|undriven)	The taste gate, measured: detector tremolo, gate chatter, drive-vs-level, preset clipping gate (0 dBFS on a -12 dBFS DI), cabinet plausibility

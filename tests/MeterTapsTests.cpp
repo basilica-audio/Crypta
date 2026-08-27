@@ -37,6 +37,10 @@ TEST_CASE ("T17: input and output peak taps match a known signal", "[meters]")
     TestHelpers::setParameter (processor, ParamIDs::midDrive, 0.0f);
     TestHelpers::setParameter (processor, ParamIDs::highDrive, 0.0f);
     TestHelpers::setParameter (processor, ParamIDs::lowCompMix, 0.0f); // compressor out of the way
+    // Pin the output trim: the startup Default preset carries -2.8 dB since
+    // the issue #34 item 1 clipping fix, and this case asserts the output
+    // tap against the raw input level of a unity chain.
+    TestHelpers::setParameter (processor, ParamIDs::outputGain, 0.0f);
     processor.reset();
 
     constexpr float amplitude = 0.5f;
