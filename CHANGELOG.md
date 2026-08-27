@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Releases now ship a macOS `.pkg` installer alongside the `.zip`**, with its own `.sha256`
+  like every other asset (basilica-audio/Crypta#31). It offers three independently selectable
+  choices — AU into `/Library/Audio/Plug-Ins/Components`, VST3 into
+  `/Library/Audio/Plug-Ins/VST3`, standalone into `/Applications` — with relocation switched
+  off on each, so an install cannot follow an older copy of `com.yvesvogl.crypta` somewhere
+  else on disk. Assembly moved out of `release.yml` into
+  `.github/scripts/build-macos-pkg.sh` so the shipping code path can be run locally against
+  real artefacts; the script self-checks every build, signed or not, asserting each
+  component's `install-location`, an empty `<relocate>`, the expected payload bundle and three
+  install choices.
+  - **The installer ships unsigned for now, and its filename says so**
+    (`crypta-vX.Y.Z-macos-unsigned.pkg`). Signing a `.pkg` needs a *Developer ID Installer*
+    certificate, which is a different Apple certificate type from the *Developer ID
+    Application* certificate the bundles are signed with — `productsign` rejects the
+    application identity outright. This is **not** the same as shipping unsigned plugins:
+    every bundle inside the payload keeps its own Developer ID signature and stapled
+    notarization ticket, so once installed the plugins are Gatekeeper-clean and load without a
+    warning; only the wrapper costs the user one right-click → **Open**. The workflow switches
+    to signing, notarizing and stapling the `.pkg` automatically once
+    `APPLE_INSTALLER_CERT_P12` exists at org level — no code change needed.
+  - **Signature survival through packaging is measured, not assumed.** Against the shipped,
+    notarized, stapled `v0.4.0` artefacts, every regular file in all three bundles hashes
+    identically before packaging and after `pkgutil --expand-full` of the resulting `.pkg`,
+    and `verify-macos-signing.sh` reports 9/9 `[PASS]` on the bundles extracted back out of
+    it. A real `installer -pkg … -target /` system install remains unverified (it needs root);
+    `docs/building.md` says so explicitly rather than implying otherwise.
+
+### Fixed
+
+- **`verify-macos-signing.sh` no longer fails the release on correctly notarized plugin
+  bundles.** The `spctl` gate assessed everything with `--type execute`, which asks "may this
+  be launched as an application?" — a question a `.component` or `.vst3` can never answer yes
+  to, so Gatekeeper returned `rejected (the code is valid but does not seem to be an app)`
+  regardless of how impeccably the bundle was signed and notarized. The gate had landed after
+  `v0.4.0` was cut and so had never run in a release; the next tag would have gone red on
+  artefacts that were perfectly fine. Plugin bundles and `.pkg` files are now assessed with
+  `--type install` (the shipped `v0.4.0` AU and VST3 report
+  `accepted source=Notarized Developer ID` under it), `--type execute` is kept for the
+  standalone `.app`.
+
 ### Changed
 
 - **Plugin metadata now carries the vendor URL, the copyright string, a real description and

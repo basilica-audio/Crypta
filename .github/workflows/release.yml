@@ -172,90 +172,66 @@ jobs:
           echo "ASSET=$SLUG-$GITHUB_REF_NAME-macos.zip" >> "$GITHUB_ENV"
           echo "SLUG=$SLUG" >> "$GITHUB_ENV"
 
-      - name: Build signed .pkg installer
+      - name: Build the .pkg installer
         timeout-minutes: 40
         # Issue #31. The bundles in stage/ are already signed, notarized and
         # stapled by the previous step; this wraps them in a distribution
-        # installer that drops each format in its canonical location.
+        # installer that drops each format where a DAW actually scans for it.
+        # The assembly itself lives in .github/scripts/build-macos-pkg.sh so
+        # that the exact code path which ships can be run locally against real
+        # artefacts - see docs/building.md, "macOS .pkg installer".
         #
-        # A .pkg is only worth shipping if it is signed with a **Developer ID
-        # Installer** certificate: notarytool refuses an unsigned .pkg, and an
-        # un-notarized installer is blocked by Gatekeeper - strictly worse for
-        # users than the plain zip. That certificate is a separate Apple
-        # certificate type from the Developer ID *Application* cert this repo
-        # already has, so the step no-ops (with a notice, not a failure) until
-        # the secret exists. Adding APPLE_INSTALLER_CERT_P12 +
-        # APPLE_INSTALLER_CERT_PASSWORD at org level is the only manual step
-        # left; everything below is ready for it.
+        # A .pkg is signed with a **Developer ID Installer** certificate, a
+        # different Apple certificate type from the Developer ID *Application*
+        # certificate that signs the bundles; holding one does not give you the
+        # other, and productsign rejects the Application identity outright
+        # ("an installer signing identity ... is required for signing
+        # flat-style products"). Until APPLE_INSTALLER_CERT_P12 exists at org
+        # level the installer therefore ships UNSIGNED, under a name that says
+        # so. That is deliberate, and it is not the same as shipping unsigned
+        # plug-ins: every bundle inside the payload carries its own Developer
+        # ID signature and stapled notarization ticket, so once installed the
+        # plug-ins are Gatekeeper-clean and load without a warning. The cost is
+        # one right-click -> Open on the installer itself.
         env:
           API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
           set -euo pipefail
-          INSTALLER_IDENTITY=$(security find-identity -v "$KEYCHAIN" | grep "Developer ID Installer" | head -1 | sed 's/.*"\(.*\)"/\1/' || true)
-          if [ -z "$INSTALLER_IDENTITY" ]; then
-            echo "::notice::No 'Developer ID Installer' identity in the keychain - skipping the .pkg installer (see issue #31). The signed/notarized zip is unaffected."
-            exit 0
-          fi
-
           VERSION="${GITHUB_REF_NAME#v}"
-          mkdir -p pkgroot/au pkgroot/vst3 pkgroot/app pkgcomp pkgout
-          cp -R stage/AU/*.component pkgroot/au/
-          cp -R stage/VST3/*.vst3 pkgroot/vst3/
-          cp -R stage/Standalone/*.app pkgroot/app/
+          INSTALLER_IDENTITY=$(security find-identity -v "$KEYCHAIN" | grep "Developer ID Installer" | head -1 | sed 's/.*"\(.*\)"/\1/' || true)
 
-          # BundleIsRelocatable is switched off on every component: all three
-          # JUCE bundles carry the same CFBundleIdentifier, so a relocatable
-          # install would happily drop the AU on top of whatever copy Spotlight
-          # finds first instead of the canonical plug-in folder.
-          build_component () {
-            local name="$1" root="$2" dest="$3" ident="$4"
-            pkgbuild --analyze --root "$root" "pkgcomp/$name.plist"
-            /usr/libexec/PlistBuddy -c "Add :0:BundleIsRelocatable bool false" "pkgcomp/$name.plist" \
-              || /usr/libexec/PlistBuddy -c "Set :0:BundleIsRelocatable false" "pkgcomp/$name.plist"
-            pkgbuild --root "$root" --component-plist "pkgcomp/$name.plist" \
-              --identifier "$ident" --version "$VERSION" \
-              --install-location "$dest" "pkgcomp/$name.pkg"
-          }
-          build_component au   pkgroot/au   "/Library/Audio/Plug-Ins/Components" "com.yvesvogl.crypta.au"
-          build_component vst3 pkgroot/vst3 "/Library/Audio/Plug-Ins/VST3"       "com.yvesvogl.crypta.vst3"
-          build_component app  pkgroot/app  "/Applications"                      "com.yvesvogl.crypta.standalone"
+          if [ -n "$INSTALLER_IDENTITY" ]; then
+            PKG="$SLUG-$GITHUB_REF_NAME-macos.pkg"
+            .github/scripts/build-macos-pkg.sh \
+              --stage stage --version "$VERSION" --out "$PKG" \
+              --identity "$INSTALLER_IDENTITY" --keychain "$KEYCHAIN"
 
-          cat > pkgcomp/distribution.xml <<XML
-          <?xml version="1.0" encoding="utf-8"?>
-          <installer-gui-script minSpecVersion="2">
-              <title>Crypta $VERSION</title>
-              <options customize="always" require-scripts="false" hostArchitectures="arm64,x86_64"/>
-              <domains enable_localSystem="true" enable_currentUserHome="false" enable_anywhere="false"/>
-              <choices-outline>
-                  <line choice="au"/>
-                  <line choice="vst3"/>
-                  <line choice="app"/>
-              </choices-outline>
-              <choice id="au" title="Audio Unit (AU)" description="Installs Crypta.component into /Library/Audio/Plug-Ins/Components."><pkg-ref id="com.yvesvogl.crypta.au"/></choice>
-              <choice id="vst3" title="VST3" description="Installs Crypta.vst3 into /Library/Audio/Plug-Ins/VST3."><pkg-ref id="com.yvesvogl.crypta.vst3"/></choice>
-              <choice id="app" title="Standalone app" description="Installs Crypta.app into /Applications."><pkg-ref id="com.yvesvogl.crypta.standalone"/></choice>
-              <pkg-ref id="com.yvesvogl.crypta.au" version="$VERSION">au.pkg</pkg-ref>
-              <pkg-ref id="com.yvesvogl.crypta.vst3" version="$VERSION">vst3.pkg</pkg-ref>
-              <pkg-ref id="com.yvesvogl.crypta.standalone" version="$VERSION">app.pkg</pkg-ref>
-          </installer-gui-script>
-          XML
-
-          PKG="$SLUG-$GITHUB_REF_NAME-macos.pkg"
-          productbuild --distribution pkgcomp/distribution.xml --package-path pkgcomp "pkgout/unsigned.pkg"
-          productsign --sign "$INSTALLER_IDENTITY" --keychain "$KEYCHAIN" "pkgout/unsigned.pkg" "$PKG"
-          pkgutil --check-signature "$PKG"
-
-          # AuthKey.p8 is still on disk from the signing step; the
-          # "Delete throwaway keychain" post step removes it.
-          xcrun notarytool submit "$PKG" \
-            --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$API_KEY_ID" --issuer "$API_ISSUER_ID" \
-            --wait --timeout 30m
-          xcrun stapler staple "$PKG"
-          # Issue #31: same three-gate assertion as the bundles above
-          # (pkgutil --check-signature in place of codesign for a .pkg,
-          # since it is a flat installer archive rather than Mach-O code).
-          .github/scripts/verify-macos-signing.sh "$PKG"
+            # A notarized .pkg needs its own ticket: the tickets stapled to the
+            # bundles in the payload say nothing about the installer wrapping
+            # them, so this is a second, separate submission.
+            #
+            # AuthKey.p8 is still on disk from the signing step; the
+            # "Delete throwaway keychain" post step removes it.
+            xcrun notarytool submit "$PKG" \
+              --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$API_KEY_ID" --issuer "$API_ISSUER_ID" \
+              --wait --timeout 30m
+            xcrun stapler staple "$PKG"
+            # Same three-gate assertion as the bundles above (pkgutil
+            # --check-signature in place of codesign for a .pkg, since it is a
+            # flat installer archive rather than Mach-O code).
+            .github/scripts/verify-macos-signing.sh "$PKG"
+          else
+            PKG="$SLUG-$GITHUB_REF_NAME-macos-unsigned.pkg"
+            echo "::warning::No 'Developer ID Installer' identity in the keychain (issue #31) - shipping the installer UNSIGNED as $PKG. The signed/notarized zip, and the signed/notarized bundles inside the installer, are unaffected."
+            .github/scripts/build-macos-pkg.sh \
+              --stage stage --version "$VERSION" --out "$PKG"
+            # verify-macos-signing.sh is deliberately NOT run here: it would
+            # fail all three gates on an unsigned .pkg by design. The
+            # structural assertions that do apply - install locations, no
+            # relocation, three choices - run inside build-macos-pkg.sh on
+            # every build, signed or not.
+          fi
           echo "PKG_ASSET=$PKG" >> "$GITHUB_ENV"
 
       - name: Delete throwaway keychain
