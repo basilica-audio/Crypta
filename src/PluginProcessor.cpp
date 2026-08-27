@@ -913,6 +913,24 @@ void CryptaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
         applyBypassCrossfade (juce::dsp::AudioBlock<const float> (dryChunk), chunk);
     }
+
+#if JUCE_INTEL
+    // DEMONSTRATION DEFECT for issue #108 - this branch exists only to prove
+    // the new gate catches something, and is never merged.
+    // An Intel-only "denormal squash" that snaps anything below the subnormal
+    // threshold to zero by dividing out its own magnitude, and forgets that a
+    // genuinely silent sample is below that threshold too: 0.0f / 0.0f is NaN.
+    // Exactly the shape #108 names - a divergence living behind JUCE_INTEL,
+    // invisible to every arm64 job in the matrix.
+    for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+    {
+        auto* data = buffer.getWritePointer (channel);
+
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+            if (std::abs (data[i]) < 1.0e-30f)
+                data[i] = data[i] / std::abs (data[i]);
+    }
+#endif
 }
 
 void CryptaAudioProcessor::processChunk (juce::dsp::AudioBlock<float>& chunk) noexcept
