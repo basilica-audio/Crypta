@@ -1,0 +1,522 @@
+{
+ "family": "basilica-wave3-composited-plate",
+ "plate": {
+  "binary": "plate_crypta_png",
+  "width1x": 1264,
+  "height1x": 848
+ },
+ "sprites": {
+  "knob": {
+   "binary": "sprite_knob_png",
+   "width": 160,
+   "height": 160,
+   "knobCx": 80,
+   "knobCy": 80,
+   "knobRadius": 63
+  },
+  "selector": {
+   "binary": "sprite_selector_png",
+   "width": 188,
+   "height": 210,
+   "knobCx": 89,
+   "knobCy": 124,
+   "knobRadius": 33
+  },
+  "toggle": {
+   "binary": "sprite_toggle_up_png",
+   "width": 117,
+   "height": 129
+  },
+  "vu": {
+   "binary": "sprite_vu_dial_png",
+   "width": 364,
+   "height": 364,
+   "contentDiameter": 348,
+   "pivotXFrac": 0.538,
+   "pivotYFrac": 0.682,
+   "needleLengthFrac": 0.43
+  }
+ },
+ "vuTicks": [
+  [
+   -20,
+   -46.0
+  ],
+  [
+   -10,
+   -35.5
+  ],
+  [
+   -7,
+   -24.5
+  ],
+  [
+   -5,
+   -14.0
+  ],
+  [
+   -3,
+   -4.0
+  ],
+  [
+   0,
+   17.5
+  ],
+  [
+   1,
+   28.0
+  ],
+  [
+   2,
+   38.5
+  ],
+  [
+   3,
+   48.0
+  ]
+ ],
+ "controls": [
+  {
+   "id": "meterInput",
+   "type": "vu",
+   "tap": "inputPeak",
+   "label": "INPUT",
+   "cx": 255,
+   "cy": 210,
+   "size": 150
+  },
+  {
+   "id": "meterOutput",
+   "type": "vu",
+   "tap": "outputPeak",
+   "label": "OUTPUT",
+   "cx": 1009,
+   "cy": 210,
+   "size": 150
+  },
+  {
+   "id": "inputGain",
+   "type": "knob",
+   "label": "INPUT",
+   "cx": 502,
+   "cy": 215,
+   "size": 58,
+   "sweep": 270
+  },
+  {
+   "id": "splitLowHz",
+   "type": "knob",
+   "label": "SPLIT LOW",
+   "cx": 582,
+   "cy": 215,
+   "size": 58,
+   "sweep": 270
+  },
+  {
+   "id": "splitHighHz",
+   "type": "knob",
+   "label": "SPLIT HIGH",
+   "cx": 662,
+   "cy": 215,
+   "size": 58,
+   "sweep": 270
+  },
+  {
+   "id": "outputGain",
+   "type": "knob",
+   "label": "OUTPUT",
+   "cx": 742,
+   "cy": 215,
+   "size": 58,
+   "sweep": 270
+  },
+  {
+   "id": "bypass",
+   "type": "toggle",
+   "label": "BYPASS",
+   "cx": 428,
+   "cy": 215,
+   "size": 34
+  },
+  {
+   "id": "outputClip",
+   "type": "toggle",
+   "label": "CLIP",
+   "cx": 816,
+   "cy": 215,
+   "size": 34
+  },
+  {
+   "id": "gateThreshold",
+   "type": "knob",
+   "label": "THRESHOLD",
+   "cx": 165,
+   "cy": 352,
+   "size": 56,
+   "sweep": 270
+  },
+  {
+   "id": "gateRatio",
+   "type": "knob",
+   "label": "RATIO",
+   "cx": 240,
+   "cy": 352,
+   "size": 56,
+   "sweep": 270
+  },
+  {
+   "id": "gateAttack",
+   "type": "knob",
+   "label": "ATTACK",
+   "cx": 315,
+   "cy": 352,
+   "size": 56,
+   "sweep": 270
+  },
+  {
+   "id": "gateRelease",
+   "type": "knob",
+   "label": "RELEASE",
+   "cx": 390,
+   "cy": 352,
+   "size": 56,
+   "sweep": 270
+  },
+  {
+   "id": "gateEnabled",
+   "type": "toggle",
+   "label": "GATE IN",
+   "cx": 448,
+   "cy": 352,
+   "size": 34
+  },
+  {
+   "id": "lowCompThreshold",
+   "type": "knob",
+   "label": "THRESHOLD",
+   "cx": 545,
+   "cy": 352,
+   "size": 56,
+   "sweep": 270
+  },
+  {
+   "id": "lowCompRatio",
+   "type": "knob",
+   "label": "RATIO",
+   "cx": 620,
+   "cy": 352,
+   "size": 56,
+   "sweep": 270
+  },
+  {
+   "id": "lowCompAttack",
+   "type": "knob",
+   "label": "ATTACK",
+   "cx": 695,
+   "cy": 352,
+   "size": 56,
+   "sweep": 270
+  },
+  {
+   "id": "lowCompRelease",
+   "type": "knob",
+   "label": "RELEASE",
+   "cx": 770,
+   "cy": 352,
+   "size": 56,
+   "sweep": 270
+  },
+  {
+   "id": "lowCompMakeup",
+   "type": "knob",
+   "label": "MAKEUP",
+   "cx": 845,
+   "cy": 352,
+   "size": 56,
+   "sweep": 270
+  },
+  {
+   "id": "lowCompMix",
+   "type": "knob",
+   "label": "MIX",
+   "cx": 920,
+   "cy": 352,
+   "size": 56,
+   "sweep": 270
+  },
+  {
+   "id": "lowLevel",
+   "type": "knob",
+   "label": "LEVEL",
+   "cx": 995,
+   "cy": 352,
+   "size": 56,
+   "sweep": 270
+  },
+  {
+   "id": "midDrive",
+   "type": "knob",
+   "label": "DRIVE",
+   "cx": 155,
+   "cy": 468,
+   "size": 52,
+   "sweep": 270
+  },
+  {
+   "id": "midLevel",
+   "type": "knob",
+   "label": "LEVEL",
+   "cx": 227,
+   "cy": 468,
+   "size": 52,
+   "sweep": 270
+  },
+  {
+   "id": "highTightHz",
+   "type": "knob",
+   "label": "TIGHT",
+   "cx": 310,
+   "cy": 468,
+   "size": 52,
+   "sweep": 270
+  },
+  {
+   "id": "highDrive",
+   "type": "knob",
+   "label": "DRIVE",
+   "cx": 382,
+   "cy": 468,
+   "size": 52,
+   "sweep": 270
+  },
+  {
+   "id": "highTone",
+   "type": "knob",
+   "label": "TONE",
+   "cx": 454,
+   "cy": 468,
+   "size": 52,
+   "sweep": 270
+  },
+  {
+   "id": "highVoicing",
+   "type": "selector",
+   "label": "VOICING",
+   "cx": 806,
+   "cy": 468,
+   "size": 52,
+   "sweep": 124
+  },
+  {
+   "id": "highBlend",
+   "type": "knob",
+   "label": "BLEND",
+   "cx": 878,
+   "cy": 468,
+   "size": 52,
+   "sweep": 270
+  },
+  {
+   "id": "highLevel",
+   "type": "knob",
+   "label": "LEVEL",
+   "cx": 944,
+   "cy": 468,
+   "size": 52,
+   "sweep": 270
+  },
+  {
+   "id": "eqLowShelfFreq",
+   "type": "knob",
+   "label": "LOW FREQ",
+   "cx": 385,
+   "cy": 590,
+   "size": 54,
+   "sweep": 270
+  },
+  {
+   "id": "eqLowShelfGain",
+   "type": "knob",
+   "label": "LOW GAIN",
+   "cx": 470,
+   "cy": 590,
+   "size": 54,
+   "sweep": 270
+  },
+  {
+   "id": "eqPeak1Freq",
+   "type": "knob",
+   "label": "PK1 FREQ",
+   "cx": 555,
+   "cy": 590,
+   "size": 54,
+   "sweep": 270
+  },
+  {
+   "id": "eqPeak1Gain",
+   "type": "knob",
+   "label": "PK1 GAIN",
+   "cx": 640,
+   "cy": 590,
+   "size": 54,
+   "sweep": 270
+  },
+  {
+   "id": "eqPeak1Q",
+   "type": "knob",
+   "label": "PK1 Q",
+   "cx": 725,
+   "cy": 590,
+   "size": 54,
+   "sweep": 270
+  },
+  {
+   "id": "eqPeak2Freq",
+   "type": "knob",
+   "label": "PK2 FREQ",
+   "cx": 385,
+   "cy": 706,
+   "size": 54,
+   "sweep": 270
+  },
+  {
+   "id": "eqPeak2Gain",
+   "type": "knob",
+   "label": "PK2 GAIN",
+   "cx": 470,
+   "cy": 706,
+   "size": 54,
+   "sweep": 270
+  },
+  {
+   "id": "eqPeak2Q",
+   "type": "knob",
+   "label": "PK2 Q",
+   "cx": 555,
+   "cy": 706,
+   "size": 54,
+   "sweep": 270
+  },
+  {
+   "id": "eqHighShelfFreq",
+   "type": "knob",
+   "label": "HI FREQ",
+   "cx": 640,
+   "cy": 706,
+   "size": 54,
+   "sweep": 270
+  },
+  {
+   "id": "eqHighShelfGain",
+   "type": "knob",
+   "label": "HI GAIN",
+   "cx": 725,
+   "cy": 706,
+   "size": 54,
+   "sweep": 270
+  },
+  {
+   "id": "eqEnabled",
+   "type": "toggle",
+   "label": "EQ IN",
+   "cx": 793,
+   "cy": 648,
+   "size": 34
+  },
+  {
+   "id": "irMix",
+   "type": "knob",
+   "label": "MIX",
+   "cx": 905,
+   "cy": 590,
+   "size": 54,
+   "sweep": 270
+  },
+  {
+   "id": "irEnabled",
+   "type": "toggle",
+   "label": "CAB IN",
+   "cx": 905,
+   "cy": 700,
+   "size": 34
+  }
+ ],
+ "labels": [
+  {
+   "text": "CRYPTA",
+   "cx": 632,
+   "cy": 128,
+   "h": 34,
+   "style": "wordmark"
+  },
+  {
+   "text": "BASILICA AUDIO",
+   "cx": 632,
+   "cy": 160,
+   "h": 11,
+   "style": "caption"
+  },
+  {
+   "text": "NOISE GATE",
+   "cx": 280,
+   "cy": 302,
+   "h": 13,
+   "style": "section"
+  },
+  {
+   "text": "LOW BAND",
+   "cx": 767,
+   "cy": 302,
+   "h": 13,
+   "style": "section"
+  },
+  {
+   "text": "MID BAND",
+   "cx": 191,
+   "cy": 417,
+   "h": 13,
+   "style": "section"
+  },
+  {
+   "text": "HIGH BAND",
+   "cx": 377,
+   "cy": 417,
+   "h": 13,
+   "style": "section"
+  },
+  {
+   "text": "MASTER EQ",
+   "cx": 555,
+   "cy": 542,
+   "h": 13,
+   "style": "section"
+  },
+  {
+   "text": "CABINET",
+   "cx": 905,
+   "cy": 542,
+   "h": 13,
+   "style": "section"
+  }
+ ],
+ "rules": [
+  {
+   "x1": 492,
+   "y1": 316,
+   "x2": 492,
+   "y2": 392
+  },
+  {
+   "x1": 265,
+   "y1": 434,
+   "x2": 265,
+   "y2": 502
+  },
+  {
+   "x1": 845,
+   "y1": 556,
+   "x2": 845,
+   "y2": 740
+  }
+ ]
+}
