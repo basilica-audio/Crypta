@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Plugin metadata now carries the vendor URL, the copyright string, a real description and
+  the VST3 sub-category.** `COMPANY_WEBSITE`, `COMPANY_COPYRIGHT` and `DESCRIPTION` were never
+  set, so a shipped bundle carried an empty `NSHumanReadableCopyright`, an empty VST3 vendor
+  URL, and an AU `description` that was just the plugin name again; `VST3_CATEGORIES` fell back
+  to JUCE's bare `Fx` default, which filed every plugin in the suite under the same
+  undifferentiated heading in a VST3 host's browser. Crypta now declares
+  `Fx Distortion Dynamics` (JUCE 8.0.14, `juce_add_plugin`). **Plugin identity is unchanged** — the VST3 class
+  ID is derived from `PLUGIN_MANUFACTURER_CODE` + `PLUGIN_CODE` alone
+  (`juce_VST3ModuleInfo.h`'s `VST3Interface::jucePluginId`) and the AU type/subtype/manufacturer
+  triple is untouched, so existing sessions keep resolving to the same plugin.
+
+### Fixed
+
+- **`docs/presets.md` states the true factory-preset total (12)** and names the three
+  presets it does not describe yet, instead of silently claiming a smaller number
+  (basilica-audio/Crypta#117).
+
+### Added
+
+- **A `Documentation` section in the README** pointing at the user manual, the factory-preset
+  reference, the changelog and the product page — the manual was only reachable from a
+  sentence in the middle of the Signal flow section.
+
 ### Added (presets recall their cabinet: bundled-IR resolution, issue #111)
 
 - **Presets may now carry an optional IR reference — the SHA-256 of the impulse-response file they were voiced with — and loading one puts that cabinet back in the slot.** The model is basilica-audio/Nave#45's, adopted as Crypta's own change: resolution is **by content hash only** (never by name or id, so a retuned model misses loudly instead of silently recalling a different sound), the user's IR library folder (`~/Music/Crypta/Impulse Responses`) is consulted **first** and the embedded bundle **second**, and the lookup is **total** — every digest lands on exactly one of notReferenced / alreadyLoaded / library / bundled / notFound. A miss performs **no audio operation at all**: the preset's parameters load, the slot keeps what it had, nothing is substituted, and a notice names the missing cabinet (`CryptaAudioProcessor::getPresetIrNotice()`; GUI wiring is a follow-up).

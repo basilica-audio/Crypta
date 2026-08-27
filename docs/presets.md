@@ -1,8 +1,11 @@
 # Factory presets
 
-Nine factory presets ship with Crypta's v0.2.0 M2 preset system. All settings are starting
+Twelve factory presets ship with Crypta. All settings are starting
 points designed against the research-derived v0.2.0 defaults (`docs/design-brief.md`'s Factory
 Presets section), not exact renders against any reference material.
+
+**Three of them are not described below yet** — *Circuit Foundation*, *Circuit Grind* and
+*Circuit Knife*, added in v0.3.0 (basilica-audio/Crypta#117).
 
 Since issue #111 a preset may carry an **optional IR reference** — the SHA-256
 of the impulse-response file it was voiced with (see `src/presets/IrReference.h`).
