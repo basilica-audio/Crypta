@@ -15,6 +15,7 @@
         "highVoicing": 1.0,
         "highDrive": 60.0,
         "irEnabled": 1.0,
-        "irMix": 70.0
+        "irMix": 70.0,
+        "outputGain": -1.07
     }
 }

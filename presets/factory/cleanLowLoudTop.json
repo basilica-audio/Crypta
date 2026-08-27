@@ -14,6 +14,7 @@
         "midDrive": 45.0,
         "highTightHz": 100.0,
         "highVoicing": 0.0,
-        "highDrive": 75.0
+        "highDrive": 75.0,
+        "outputGain": -3.82
     }
 }

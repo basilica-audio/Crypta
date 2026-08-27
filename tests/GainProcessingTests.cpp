@@ -43,13 +43,22 @@ namespace
         auto* lowCompMixParam = processor.apvts.getParameter (ParamIDs::lowCompMix);
         auto* midDriveParam = processor.apvts.getParameter (ParamIDs::midDrive);
         auto* highBlendParam = processor.apvts.getParameter (ParamIDs::highBlend);
+        auto* outputGainParam = processor.apvts.getParameter (ParamIDs::outputGain);
         REQUIRE (lowCompMixParam != nullptr);
         REQUIRE (midDriveParam != nullptr);
         REQUIRE (highBlendParam != nullptr);
+        REQUIRE (outputGainParam != nullptr);
 
         lowCompMixParam->setValueNotifyingHost (lowCompMixParam->convertTo0to1 (0.0f));
         midDriveParam->setValueNotifyingHost (midDriveParam->convertTo0to1 (0.0f));
         highBlendParam->setValueNotifyingHost (highBlendParam->convertTo0to1 (0.0f));
+
+        // The startup state is the factory Default PRESET, which since the
+        // issue #34 item 1 trims carries a -2.8 dB output trim (so it no
+        // longer clips a nominally tracked DI). These tests are about the
+        // input/output trim MATH, so the trim is pinned back to 0 dB
+        // explicitly, like the voicing stages above.
+        outputGainParam->setValueNotifyingHost (outputGainParam->convertTo0to1 (0.0f));
     }
 }
 

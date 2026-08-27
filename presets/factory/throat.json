@@ -15,6 +15,7 @@
         "midLevel": 2.0,
         "highTightHz": 120.0,
         "highVoicing": 1.0,
-        "highDrive": 30.0
+        "highDrive": 30.0,
+        "outputGain": -1.63
     }
 }
