@@ -7,7 +7,7 @@ on:
   # The x86_64 format-validation step below deliberately does not run on the
   # pull_request path (see its own comment for the cost arithmetic). This makes
   # it runnable on demand against any branch, which is also how its runtime was
-  # measured and how the demonstration in PR #109 was produced.
+  # measured and how the demonstration in PR #110 was produced.
   workflow_dispatch:
 
 concurrency:
@@ -36,8 +36,8 @@ jobs:
             # min for the same tree, so the headroom is not slack.
             #
             # 35 -> 40 with the x86_64 format-validation step (issue #108),
-            # which adds ~4 min but only on push/workflow_dispatch, and carries
-            # its own 15-minute step timeout.
+            # measured at 3 min 26 s but only on push/workflow_dispatch, and
+            # carrying its own 15-minute step timeout.
             timeout: 40
           - os: windows-latest
             timeout: 35
@@ -320,9 +320,11 @@ jobs:
         # Not on every pull request, unlike the x86_64 *test suite* step, and
         # the reason is the measured runtime rather than a preference. See
         # .github/scripts/validate-macos-x86_64-slice.sh for the mechanism and
-        # PR #109 for the numbers: this adds ~4 min to a job that bills at a 10x
-        # multiplier, against a defect class - plugin-format conformance of the
-        # Intel slice - that changes far less often than the DSP does.
+        # PR #110 for the numbers: this adds 3 min 26 s to a job that bills at a
+        # 10x multiplier, against a defect class - plugin-format conformance of
+        # the Intel slice - that changes far less often than the DSP does. Over
+        # the last 30 days that is ~960 runner-minutes a month here against
+        # ~3020 for every-PR.
         #
         # Placing it inside this job rather than in a scheduled workflow of its
         # own is what makes it affordable at all: it reuses the Universal Binary
