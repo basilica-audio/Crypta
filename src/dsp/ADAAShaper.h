@@ -219,6 +219,15 @@ namespace cryp
     public:
         void reset() noexcept { previousInput = 0.0; }
 
+        // Seeds the one-sample input history with a known operating point, so
+        // the first process() call after a reset sees no spurious input step.
+        // Without this, a stage whose quiescent input is a non-zero constant
+        // (the Circuit high band's bias offset) starts every fresh render with
+        // one sample of the ADAA quotient averaged over [0, operating point] -
+        // half the offset, as an impulse into everything downstream. Called
+        // from reset()-time code only, never mid-stream.
+        void prime (double quiescentInput) noexcept { previousInput = quiescentInput; }
+
         // `curve` must expose f(x) and antiderivative(x). Both the closed-form
         // structs above (as static members) and ShaperTable (as instance
         // members) satisfy this, so the call sites read the same either way.

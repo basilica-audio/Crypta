@@ -330,24 +330,27 @@ checklist lines were written to catch.
 | Modern gate: chatter on chugs? | **Exactly 8 openings, and it is not a tolerance.** The test signal is an eight-note chug train whose amplitude, between onsets, only ever decreases. A ninth opening is a re-trigger on a signal that was getting quieter, which is what chatter *is* | **8 openings for 8 notes. Answered: it does not chatter.** |
 | Modern gate: swallowed attacks? | **0.5 dB of peak loss** against the same note with the gate off — below the ~1 dB level difference reliably heard on a transient | **0.174 dB on notes 2–8, 0.230 dB on the first note from a fully closed gate. Answered: it does not swallow attacks.** |
 | Voicings: does the drive control still behave like one? | **No attenuation** relative to the same voicing at 0 % drive (no tolerance to choose), and **no more than +12 dB** over it | Classic: Gnaw −17.9 → −12.5 dB, Wool −17.9 → −14.5 dB, Razor −17.9 → −16.5 dB. Circuit: −16.1 → −12.0 / −16.1 → −15.7 / −16.0 → −15.1 dB. All monotone, all inside +12 dB |
-| Factory presets: broken or silent on a real DI? | **Bounded by +12 dBFS** (the safety clip's ceiling plus transient headroom — `tests/ParameterSweepTests.cpp`'s own derivation) and **not more than 20 dB below the input** | All 12 finite, all in bounds, none silent. Level changes +6.3 dB to +13.4 dB on a −12 dBFS bass DI |
+| Factory presets: broken, silent, or clipping on a real DI? | **Bounded by +12 dBFS** (the safety clip's ceiling plus transient headroom — `tests/ParameterSweepTests.cpp`'s own derivation), **not more than 20 dB below the input**, and — since the issue #34 item 1 trims — **below 0 dBFS** on the −12 dBFS DI, with the shipped `outputGain` trims targeting −0.3 dBFS on that fixture | All 12 finite, all in bounds, none silent, all at or below **−0.30 dBFS** (range −0.30 to −3.79). Level changes +1.8 dB to +11.7 dB on a −12 dBFS bass DI |
 | Cabinets: are these shaped like bass cabinets? | **−10 dB low edge in [25, 70] Hz** — a bass cab has to reproduce a 41 Hz low E and none extends below ~25 Hz. **−10 dB high edge in [1.2 kHz, 6 kHz]** for the hornless models — where voice-coil inductance kills a 10"/15" driver. **The horn model at least 10 dB above every hornless model at 8 kHz**, or its HF path is inaudible and the name is wrong | 8x10 Cone **32–4699 Hz**, 8x10 Edge **34–2172 Hz**, 1x15 Vintage **34–1804 Hz**, 4x10 Horn **37–3079 Hz**; horn at 8 kHz **−15.0 dB against −27.3 dB** for the loudest hornless, a **12.2 dB** difference. All four pairwise distinct by more than 3 dB somewhere in 40 Hz – 8 kHz |
 
 #### What the measurements found, and what is a taste call rather than a defect
 
-Three figures came out where a listener would have had something to say, and
-none of them is asserted, because asserting any of them would be this file
-deciding a question that belongs to the person who voiced the plugin. They are
-recorded here, and in the issue, as fine-tune items:
+Three figures came out where a listener would have had something to say. One of
+them has since been reclassified as a defect and fixed; the other two are not
+asserted, because asserting them would be this file deciding a question that
+belongs to the person who voiced the plugin. They are recorded here, and in the
+issue, as fine-tune items:
 
-1. **Eight of the twelve factory presets push a −12 dBFS bass DI past 0 dBFS**,
-   `Default` among them at **+2.49 dBFS**. Worst is `Clean Low, Loud Top` at
-   **+3.52 dBFS**; the largest level change is `Throat` at **+13.4 dB**. That is
-   not a correctness bug — a drive-and-makeup plugin legitimately raises level,
-   and in a 32-bit-float mixer nothing is lost — but every one of those presets
-   asks the user to pull the fader before they can audition it. A one-line trim
-   on each preset's `outputGain` would fix it. Whether it *should* be fixed is
-   gain-staging taste.
+1. **[FIXED — issue #34 item 1] Eight of the twelve factory presets pushed a
+   −12 dBFS bass DI past 0 dBFS**, `Default` among them at **+2.49 dBFS**,
+   worst `Clean Low, Loud Top` at **+3.52 dBFS**. Reclassified: a preset that
+   clips at the canonical tracking level is a defect, not gain-staging taste.
+   Each offending preset now carries a derived `outputGain` trim targeting
+   **−0.3 dBFS** on the reference DI (nothing else in any preset changed, and
+   presets already under the target were not raised — that would be
+   level-matching, which is item 2 and still open), and the measurement is a
+   gate: `tests/ListeningProxyTests.cpp` asserts every factory preset stays
+   below 0 dBFS on this fixture.
 2. **The three voicings are not level-matched.** At 70 % drive on a bass DI the
    spread is **3.97 dB on Classic** (Gnaw −12.5, Wool −14.5, Razor −16.5) and
    **3.68 dB on Circuit** (Gnaw −12.0, Wool −15.7, Razor −15.1). Above about
@@ -363,12 +366,16 @@ recorded here, and in the issue, as fine-tune items:
    attenuator is voiced too low is a voicing decision.
 
 One further measured datapoint, from the silence gate rather than the listening
-one: **a freshly prepared instance whose state already has `High Bias` at 100 %
-emits a 0.137-peak (−17 dBFS) DC transient into silence** while the 10 Hz
-blocker settles. The blocker does its job — the steady-state DC is 4.2e-14,
-seven orders of magnitude below the 24-bit floor — but the settling itself is
-audible as a thump on a preset load. Priming the blocker at `prepare()` the way
-#98 primed the gain stages would remove it.
+one — **[FIXED — issue #34 item 4]**: a freshly prepared instance whose state
+already had `High Bias` at 100 % emitted a **0.137-peak (−17 dBFS) DC transient
+into silence** while the 10 Hz blocker settled — a thump on session load and
+preset recall. The bias offset's own image through the shaper is now subtracted
+at its creation (the construction Wool and `cryp::LowGrowl` already used,
+extended to Gnaw and Razor) and `CircuitDrive::reset()` primes the shapers'
+ADAA history at the bias operating point, so the blocker has nothing to settle.
+Gated in `tests/SilenceFloorTests.cpp`: session-load restore measures **exactly
+0.0** against the 2⁻²⁴ floor including the transient; mid-playback restore
+measures 1.1e-4–1.9e-4 against a derived 1.042e-3 ramp-residual bound.
 
 ### Voicing approval — the taste gate
 
@@ -411,8 +418,10 @@ nothing — not so that the listening can be skipped.
 - [ ] Every factory preset is musically usable on a real bass DI, not just
       in range.
       *Measured, not heard:* all twelve factory presets parse, load, round-trip
-      and land in range (`tests/PresetManagerTests.cpp`). "Musically usable" is
-      untested and untestable here.
+      and land in range (`tests/PresetManagerTests.cpp`), and every one renders
+      the −12 dBFS reference DI below 0 dBFS (`tests/ListeningProxyTests.cpp`,
+      the issue #34 item 1 gate — shipped trims target −0.3 dBFS). "Musically
+      usable" is untested and untestable here.
 
 ### Bundled cabinet IRs — the other taste gate (#81)
 
@@ -555,6 +564,7 @@ measured" above.
    speech is useful, and whether the editor is legible rather than merely
    unclipped. Unchanged.
 
-Plus the three fine-tune items recorded above (preset gain staging, voicing
-level matching, the horn attenuator) and the High Bias settling thump. None of
-them is a ship blocker; all four are one-line changes if Yves wants them.
+Plus the two fine-tune items still recorded above (voicing level matching, the
+horn attenuator) — the preset gain staging and the High Bias settling thump
+were reclassified as defects and fixed (issue #34 items 1 and 4). Neither
+remaining item is a ship blocker; both are one-line changes if Yves wants them.

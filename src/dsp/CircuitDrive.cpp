@@ -336,6 +336,25 @@ namespace cryp
 
         for (auto& state : midState)
             state.reset();
+
+        // Prime each high-band shaper's input history at the bias operating
+        // point (issue #34 item 4, the same prime-before-first-block idea as
+        // issue #98's gain stages). At silence every voicing's shaper input is
+        // exactly the bias offset - Gnaw and Razor add it to a zero signal
+        // path, Wool's dynamic bias envelope is zero - so after this, a fresh
+        // render at any High Bias setting starts AT its quiescent point: the
+        // ADAA fallback returns f(offset), the subtraction at the call sites
+        // removes it exactly, and nothing steps into the 10 Hz DC blocker.
+        //
+        // The ramp target rather than its current value is deliberate: every
+        // reset() entry point (prepare(), the processor's reset(), the engine
+        // switch flush) either has just snapped the ramps or is about to
+        // crossfade from silence, and the target is the value the first
+        // block will settle on.
+        const auto quiescentShaperInput = maxBiasOffset * static_cast<double> (highBias01);
+
+        for (auto& state : highState)
+            state.shaper.prime (quiescentShaperInput);
     }
 
     //==========================================================================
@@ -506,8 +525,24 @@ namespace cryp
                 case VoicingType::gnaw:
                 {
                     // Pre-emphasis -> hard clip -> exact inverse de-emphasis.
+                    //
+                    // The clipper's response to the bias offset ON ITS OWN is
+                    // subtracted at the point of creation - the same
+                    // construction Wool below and cryp::LowGrowl already use
+                    // (tanh(g*x + b) - tanh(b)). Without it the bias's static
+                    // image is a DC step the 10 Hz blocker downstream has to
+                    // settle out of every fresh render: measured as a
+                    // 0.137-peak (-17 dBFS) thump into silence when a state
+                    // with High Bias at 100 % is restored (issue #34 item 4).
+                    // With it, the blocker's operating point is zero at every
+                    // bias setting, so there is nothing to settle - restores,
+                    // preset loads and bias automation included. What the
+                    // blocker still removes is the PROGRAMME-dependent DC the
+                    // asymmetric clipping of real signal produces, which is
+                    // the part no static subtraction can know.
                     const auto emphasised = state.preEmphasis.process (x);
-                    const auto clipped = state.shaper.process (highDriveGainNow * emphasised + biasOffset, hardClip);
+                    const auto clipped = state.shaper.process (highDriveGainNow * emphasised + biasOffset, hardClip)
+                                          - hardClip.f (biasOffset);
                     shaped = state.deEmphasis.process (clipped);
                     break;
                 }
@@ -550,8 +585,11 @@ namespace cryp
                     // this topology stays touch-sensitive. The 330 Hz
                     // pre-emphasis keeps the bass fundamental out of the
                     // clipped path.
+                    // The bias offset's own image is subtracted at the point
+                    // of creation, for the same reason as in Gnaw above.
                     const auto emphasised = state.razorHighPass.processHighPass (x);
-                    const auto clipped = state.shaper.process (highDriveGainNow * emphasised + biasOffset, razorCurve);
+                    const auto clipped = state.shaper.process (highDriveGainNow * emphasised + biasOffset, razorCurve)
+                                          - razorCurve.evaluate (biasOffset);
                     shaped = x + clipped;
                     break;
                 }

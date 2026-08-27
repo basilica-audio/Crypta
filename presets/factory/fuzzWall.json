@@ -15,6 +15,7 @@
         "highTightHz": 100.0,
         "highVoicing": 1.0,
         "highDrive": 85.0,
-        "highBlend": 100.0
+        "highBlend": 100.0,
+        "outputGain": -3.16
     }
 }

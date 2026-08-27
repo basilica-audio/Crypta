@@ -110,6 +110,10 @@ TEST_CASE ("Latency: band-split-then-sum preserves magnitude flatness through th
         highBlendParam->setValueNotifyingHost (highBlendParam->convertTo0to1 (0.0f));
         lowCompMixParam->setValueNotifyingHost (lowCompMixParam->convertTo0to1 (0.0f));
         midDriveParam->setValueNotifyingHost (midDriveParam->convertTo0to1 (0.0f));
+        // The startup state is the factory Default preset, which carries a
+        // -2.8 dB output trim since the issue #34 item 1 clipping fix; this
+        // case measures the SPLIT-SUM identity, so the trim is pinned to 0 dB.
+        TestHelpers::setParameter (processor, ParamIDs::outputGain, 0.0f);
 
         juce::AudioBuffer<float> buffer (2, testBlockSize);
         juce::MidiBuffer midi;
@@ -275,6 +279,10 @@ TEST_CASE ("T14: the Circuit engine keeps the three-way sum flat at every sample
         TestHelpers::setParameter (processor, ParamIDs::highBlend, 100.0f);
         TestHelpers::setParameter (processor, ParamIDs::highTone, 100.0f);
         TestHelpers::setParameter (processor, ParamIDs::lowCompMix, 0.0f);
+        // Pin the output trim: the startup Default preset carries -2.8 dB
+        // since the issue #34 item 1 clipping fix, and this case asserts the
+        // three-way sum against the RAW input level.
+        TestHelpers::setParameter (processor, ParamIDs::outputGain, 0.0f);
 
         processor.prepareToPlay (sampleRate, 512);
         processor.reset();

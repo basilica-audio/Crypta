@@ -121,7 +121,7 @@ Unless noted otherwise, all continuous parameters are smoothed to avoid zipper n
 | Parameter | Range | Default | Unit | What it does |
 |---|---|---|---|---|
 | Input Gain | −24 … +24 | 0 | dB | Trims the signal before anything else in the chain. Use this to get a hot but not clipping signal into the gate/compressor/drive/voicing stages - all of their thresholds are calibrated assuming a reasonably "line level" input. |
-| Output Gain | −24 … +24 | 0 | dB | Final output trim, applied after everything else (including the safety clip). |
+| Output Gain | −24 … +24 | 0 | dB | Final output trim, applied after everything else (including the safety clip). The control's own default is 0 dB, but a fresh instance starts on the factory *Default* preset, which sets −2.8 dB — the derived trim that keeps a −12 dBFS bass DI under full scale (every factory preset carries such a trim where it needs one). |
 | Bypass | off/on | off | — | Forces a bit-exact passthrough of the input signal. Also exposed as the plugin's host-facing bypass parameter, so your DAW's own bypass button/automation lane works too. |
 | Safety Clip | off/on | off | — | A soft ceiling clip on the very last stage before the output trim. Off by default; turn it on as a safety net against accidental hard-clipped overs, not as a tone-shaping tool. As of v0.3.0 it is antialiased and is genuinely transparent below the ceiling — arming it no longer colours anything until something actually reaches the ceiling. |
 | Clip Ceiling | −12 … 0 | 0 | dBFS | Where the safety clip starts working. Only read while Safety Clip is on. 0 dBFS reproduces the v0.2.0 behaviour. |
