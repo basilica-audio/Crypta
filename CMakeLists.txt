@@ -111,6 +111,16 @@ juce_add_binary_data(CryptaBinaryData SOURCES
     resources/irs/modelled_8x10_edge.wav
     resources/irs/modelled_1x15_vintage.wav
     resources/irs/modelled_4x10_horn.wav
+    # Provenance travels with the audio (issue #111, adopting Nave's #48
+    # curation rules): the licensing bar is a licence committed ALONGSIDE the
+    # audio, so a shipped binary carries it too, and a materialised/installed
+    # copy can never leave it behind. Consumed by crypta::factoryIrAssets()
+    # in src/PluginProcessor.cpp; byte-exactness on every platform is what
+    # .gitattributes' `-text` rules and the footprint assertion in
+    # tests/BundledIrCurationTests.cpp guard.
+    resources/irs/LICENSES.md
+    resources/irs/CC0-1.0.txt
+    resources/irs/manifest.json
 )
 
 # ==============================================================================
@@ -172,6 +182,10 @@ target_compile_definitions(SharedCode INTERFACE
 
 target_link_libraries(SharedCode INTERFACE
     juce::juce_audio_utils
+    # Preset -> IR references resolve by SHA-256 of the IR file's bytes (see
+    # src/presets/IrReference.h). juce_cryptography depends only on juce_core
+    # and adds nothing to the audio path.
+    juce::juce_cryptography
     juce::juce_dsp
     juce::juce_gui_basics
     juce::juce_recommended_config_flags

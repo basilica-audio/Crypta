@@ -19,3 +19,6 @@ countries: de at ch
 "This file is not a valid preset." = "Diese Datei ist keine gültige Voreinstellung."
 "This preset was saved by an incompatible version of the preset format." = "Diese Voreinstellung wurde mit einer inkompatiblen Version des Voreinstellungsformats gespeichert."
 "This preset file belongs to a different plugin." = "Diese Voreinstellungsdatei gehört zu einem anderen Plugin."
+"This preset was made with NAME, which is not in your IR library." = "Diese Voreinstellung wurde mit NAME erstellt, das nicht in Deiner IR-Bibliothek liegt."
+"Its settings were loaded and the IR slot was left as it was." = "Ihre Einstellungen wurden geladen, der IR-Slot blieb unverändert."
+"Crypta could not write out its own copy of it." = "Crypta konnte seine eigene Kopie davon nicht speichern."

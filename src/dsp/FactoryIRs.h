@@ -69,6 +69,37 @@ namespace cryp
         // Not owned by this struct.
         const void* data = nullptr;
         int dataSizeBytes = 0;
+
+        // The embedded file's own name ("modelled_8x10_cone.wav"). Used by
+        // the bundled-IR resolution layer (src/ir/BundledIrSource.h, issue
+        // #111) to materialise the asset to disk under the name the
+        // repository and resources/irs/manifest.json know it by. Declared
+        // after the original five fields (with stableId below) so the
+        // pre-#111 positional initializers in tests keep meaning what they
+        // meant; the shipped table in getFactoryIRAssetTable() sets both.
+        const char* fileName = nullptr;
+
+        // The cabinet's STABLE IDENTITY, matching the `id` field
+        // resources/irs/manifest.json records for the same file
+        // ("bass-810-cone").
+        //
+        // WHAT IT IS FOR, AND WHAT IT IS EMPHATICALLY NOT FOR. This names the
+        // MODEL, not the audio. It is the handle documentation, the manifest,
+        // the release notes and a sibling plugin use to talk about the same
+        // cabinet across releases, and it is the thing that survives a file
+        // being renamed.
+        //
+        // It is NEVER a resolution key. Presets resolve by a hash of the
+        // file's BYTES (src/presets/IrReference.h), precisely because an
+        // identity-based id would silently follow a retuned model - the
+        // preset would keep loading, keep looking correct, and quietly
+        // recall a different sound. The two identifiers answer deliberately
+        // different questions: the id asks "which cabinet is this", the
+        // digest asks "is this exactly the audio the preset was made with".
+        // Release policy (kept enforceable by tests/BundledIrCurationTests
+        // .cpp): rename freely, never retune in place; removing a shipped
+        // cabinet is a major-version break.
+        const char* stableId = nullptr;
     };
 
     bool isApprovedFactoryIRLicence (juce::StringRef licence) noexcept;

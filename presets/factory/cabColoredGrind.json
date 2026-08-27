@@ -4,6 +4,12 @@
     "pluginVersion": "0.3.0",
     "name": "Cab-Colored Grind",
     "category": "Bass",
+    "ir": {
+        "a": {
+            "sha256": "67aa93d0e238e88b74b455c3b5322d455d61c007620ace2d2cb88b54c6a793e2",
+            "name": "Modelled 8x10 Cone"
+        }
+    },
     "parameters": {
         "driveEngine": 0.0,
         "lowCompDetector": 0.0,

@@ -3,6 +3,9 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 
+#include <functional>
+#include <vector>
+
 #include "dsp/BandEQ.h"
 #include "dsp/CircuitDrive.h"
 #include "dsp/Crossover.h"
@@ -16,6 +19,8 @@
 #include "dsp/ParallelCompressor.h"
 #include "dsp/PhaseAlignFilter.h"
 #include "dsp/Voicing.h"
+#include "ir/FactoryIrLibrary.h"
+#include "ir/IrContentIndex.h"
 #include "presets/PresetManager.h"
 
 // v0.2.0 "deep-dive" rebuild (docs/design-brief.md): the v1.0 2-band
@@ -127,6 +132,130 @@ public:
 
     // Restores the bit-exact passthrough identity IR - the IR slot's "None".
     void clearImpulseResponse();
+
+    //==============================================================================
+    // Preset -> IR references (issue #111, adopting the resolution model
+    // basilica-audio/Nave#45 settled). See src/presets/IrReference.h for why
+    // the identifier is a hash of the file's BYTES and never its name or id,
+    // and src/ir/BundledIrSource.h for the embedded resolution source.
+    //
+    // All of this is message-thread-only (file I/O and hashing throughout);
+    // nothing below is ever called from processBlock().
+
+    // Loads an IR from a file on disk: the file's bytes go through the same
+    // cryp::FactoryIRLibrary::decodeFromMemory() decoder an embedded factory
+    // slot uses - ONE decode path, which is what keeps the two resolution
+    // sources sample-identical by construction. False (and no change to the
+    // running convolution) if the file cannot be read or decoded.
+    bool loadImpulseResponseFromFile (const juce::File& file);
+
+    // The absolute path of the file the slot was last loaded from, or an
+    // empty string when the slot holds a factory IR loaded by index, a raw
+    // buffer, or nothing. Display/bookkeeping only - nothing resolves by it.
+    juce::String getCurrentIrFilePath() const { return currentIrFilePath; }
+
+    // Lowercase SHA-256 of the FILE BYTES the slot's current IR was decoded
+    // from, or an empty string when nothing (or a raw untracked buffer) is
+    // loaded. This is what a saved preset records, and what the
+    // alreadyLoaded short-circuit in resolveIrReference() compares against.
+    juce::String getCurrentIrContentHash() const { return currentIrContentHash; }
+
+    // A copy of the raw samples most recently loaded into the convolver (and
+    // the sample rate they were tagged with), kept for tests and future UI:
+    // juce::dsp::Convolution offers no way to read back what it holds, and
+    // the "a miss performs no audio operation" guarantee needs an observable
+    // to be assertable. Empty (0 samples) while only the identity
+    // passthrough is installed.
+    const juce::AudioBuffer<float>& getLoadedImpulseResponse() const noexcept { return loadedIrBuffer; }
+    double getLoadedImpulseResponseSampleRate() const noexcept { return loadedIrSampleRate; }
+
+    // Folders searched (in order) when resolving a preset's IR reference:
+    // the folder ParamIDs::irLibraryFolderProperty names (when set), then
+    // the out-of-the-box basilica::ir::IrLibrary::defaultDirectory().
+    std::vector<juce::File> getIrSearchRoots() const;
+    void refreshIrSearchRoots();
+
+    // WHERE a referenced IR came from. This enumeration is TOTAL: every
+    // digest a preset can carry lands on exactly one of these, including the
+    // ones that name nothing and the ones that name something nobody has.
+    // There is no "undefined" outcome and no path that leaves the caller
+    // guessing what happened to the slot.
+    enum class IrReferenceSource
+    {
+        // The preset carries no digest. Not an error, and by far the
+        // commonest case - every preset written before #111, and every
+        // preset saved with no IR loaded.
+        notReferenced,
+
+        // The slot ALREADY holds exactly those bytes. The convolver is left
+        // alone: reloading it would be a glitch in exchange for nothing.
+        alreadyLoaded,
+
+        // A file under the user's IR search roots hashes to the digest.
+        // Checked FIRST - see the precedence note in src/ir/BundledIrSource.h.
+        library,
+
+        // Crypta's own embedded copy, written out to
+        // getBundledIrCacheDirectory() and then loaded through the same file
+        // path a library resolution uses. Only reachable for the four
+        // bundled digests.
+        bundled,
+
+        // Nobody has these bytes - not the library, not the bundle - or the
+        // bundled copy could not be written to disk. The slot is LEFT AS IT
+        // IS: whatever was playing keeps playing, nothing is substituted,
+        // and the caller raises a notice. This is the degradation path, and
+        // it is audibly safe by construction because it performs no audio
+        // operation at all.
+        notFound
+    };
+
+    struct ResolvedIrReference
+    {
+        IrReferenceSource source = IrReferenceSource::notFound;
+
+        // A real, existing file when `source` is library or bundled (and,
+        // when the slot was loaded from a file, alreadyLoaded); a default
+        // juce::File otherwise. Never a path to something that is not there.
+        juce::File file;
+    };
+
+    // Answers "where do I get the bytes with this digest". Refreshes the
+    // search roots itself, so it is safe to call standalone. Blocking file
+    // I/O (directory scan, hashing, possibly one small write): message
+    // thread only, never processBlock().
+    //
+    // The alreadyLoaded short-circuit compares against
+    // getCurrentIrContentHash() - the digest of the bytes the ENGINE
+    // actually holds - rather than re-hashing a path, so a file rewritten on
+    // disk after it was loaded cannot make the answer lie about the sound.
+    ResolvedIrReference resolveIrReference (const juce::String& contentHash);
+
+    // Where the embedded IRs are written out to when a reference resolves
+    // against the bundle. Defaults to IrLibrary::bundledCacheDirectory();
+    // the setter exists so tests never write into the real user location
+    // (the same role PresetManagerConfig::userPresetsDirectoryOverrideForTests
+    // plays for presets). Setting an empty File restores the default.
+    juce::File getBundledIrCacheDirectory() const;
+    void setBundledIrCacheDirectoryForTests (const juce::File& folder);
+
+    // Wires capturePresetIrReferences()/applyPresetIrReferences() into a
+    // PresetManager's extra-field hooks. The constructor does this for the
+    // member presetManager; tests building isolated managers call it
+    // themselves.
+    void installPresetIrCallbacks (basilica::presets::PresetManager& manager);
+
+    // The message the last preset load left behind about IR references: an
+    // empty string when every reference resolved (or there was none), a
+    // user-facing sentence naming the missing cabinet otherwise. A GUI is
+    // expected to poll this (or subscribe below) and show it in a notice
+    // strip; nothing in src/gui consumes it yet - see issue #111.
+    juce::String getPresetIrNotice() const { return presetIrNotice; }
+
+    // Called on the message thread after every preset load whose notice
+    // DIFFERS from the previous one (empty string included, so a listener
+    // can clear a stale message). Optional; set by the future GUI wiring.
+    std::function<void (const juce::String&)> onPresetIrNotice;
 
     // Peak low-band gain reduction from the last processed block, in POSITIVE
     // decibels (0 = no reduction). Reads the same lock-free tap the meters
@@ -308,6 +437,54 @@ private:
     // getFactoryIRAssetTable() and resources/irs/LICENSES.md.
     cryp::FactoryIRLibrary factoryIRs { getFactoryIRAssetTable() };
 
+    //==============================================================================
+    // Preset -> IR reference state (issue #111). All message-thread-only.
+
+    // PresetManagerConfig::captureExtraFields: records the SHA-256 (plus a
+    // display name, for messages only) of whatever is loaded in the IR slot
+    // onto a preset being saved. Writes nothing when no tracked IR is
+    // loaded, so a preset saved from the identity-passthrough default is
+    // byte-identical to what the pre-#111 saver produced.
+    void capturePresetIrReferences (juce::DynamicObject& presetObject);
+
+    // PresetManagerConfig::applyExtraFields: if the loaded IR already IS the
+    // referenced bytes, do nothing; else resolve them (library first,
+    // bundled second) and load the file that matches; else - and this is the
+    // case that matters - leave the slot untouched and put the expected IR's
+    // name into the notice. Never substitutes, never refuses the preset.
+    void applyPresetIrReferences (const juce::var& presetObject);
+
+    // The bundled library's display name for a digest, or an empty string
+    // when the digest is not one of Crypta's own IRs. Used to name an IR
+    // whose preset recorded no name.
+    juce::String bundledDisplayNameForContentHash (const juce::String& contentHash) const;
+
+    // The single funnel every IR load goes through: pushes the buffer into
+    // the irLoader, keeps the observable copy, and records the bookkeeping
+    // (digest/name/path) a preset save captures. Pass empty strings for a
+    // load whose file bytes are unknown (the raw public
+    // loadImpulseResponse()).
+    void applyLoadedImpulseResponse (juce::AudioBuffer<float> irBuffer,
+                                     double irSampleRate,
+                                     const juce::String& contentHash,
+                                     const juce::String& displayName,
+                                     const juce::String& filePath);
+
+    basilica::ir::IrContentIndex irContentIndex;
+    juce::File bundledIrCacheDirectoryOverride; // empty = the real location
+    juce::String presetIrNotice;
+
+    juce::String currentIrContentHash;   // empty = untracked or nothing loaded
+    juce::String currentIrDisplayName;
+    juce::String currentIrFilePath;      // empty for factory-by-index / raw loads
+
+    // See getLoadedImpulseResponse(). NOTE: deliberately not touched by
+    // prepareToPlay(), which re-installs the identity IR in the irLoader -
+    // the loaded-cab-does-not-survive-re-prepare behaviour predates #111 and
+    // is tracked separately.
+    juce::AudioBuffer<float> loadedIrBuffer;
+    double loadedIrSampleRate = 0.0;
+
     // v0.3.0 safety clip: ADAA ceiling clip in delta form, replacing the raw
     // base-rate std::tanh (see src/dsp/OutputClipper.h).
     cryp::OutputClipper outputClipper;
@@ -461,3 +638,17 @@ private:
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CryptaAudioProcessor)
 };
+
+namespace crypta
+{
+    // The bundled factory IR library as embedded bytes, in the
+    // BinaryData-free shape src/ir/FactoryIrLibrary.h consumes (issue #111).
+    // Defined in PluginProcessor.cpp - the translation unit already allowed
+    // to include BinaryData.h - and derived from
+    // CryptaAudioProcessor::getFactoryIRAssetTable() plus the three
+    // provenance files, so the licensing table and the resolution source
+    // cannot drift apart. A function-local static: built once per process,
+    // and the vector outlives the BundledIrSource that keeps pointers into
+    // it (see src/PluginProcessor.cpp).
+    const std::vector<basilica::ir::FactoryIrAsset>& factoryIrAssets();
+}

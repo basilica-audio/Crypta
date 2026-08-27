@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <atomic>
+#include <functional>
 #include <vector>
 
 // Basilica Audio suite-wide M2 preset system
@@ -60,6 +61,34 @@ namespace basilica::presets
         // leaves this default-constructed (empty), so production instances
         // always use the real per-user preset location.
         juce::File userPresetsDirectoryOverrideForTests;
+
+        // Optional hooks for plugin-specific data that is NOT a parameter
+        // value and therefore has no place in the "parameters" object -
+        // Crypta uses them for the optional IR reference described in
+        // src/presets/IrReference.h (ported from the suite pilot,
+        // basilica-audio/Nave issue #42; adopted here by issue #111).
+        //
+        // These are callbacks rather than a field this class knows about
+        // because PresetManager is copied verbatim into sibling plugins (see
+        // the file-level note): it has to be able to carry a plugin's extra
+        // field without ever learning what the field means.
+        //
+        // captureExtraFields is handed the preset document being built,
+        // after its standard keys are set, and may add top-level properties
+        // of its own. Adding none is normal, and leaves the written file
+        // byte-identical to one produced by a build with no hook installed.
+        //
+        // applyExtraFields is handed the whole parsed preset document after
+        // its parameter values have been applied and after the legacy
+        // back-fill below has run, so the hook sees a fully settled plugin
+        // state. It is called for EVERY preset load, including presets
+        // carrying no extra fields at all, so a plugin can also use it to
+        // clear state left behind by the previously loaded preset.
+        //
+        // Both are message-thread-only, like every other public operation on
+        // this class.
+        std::function<void (juce::DynamicObject&)> captureExtraFields;
+        std::function<void (const juce::var&)> applyExtraFields;
 
         //======================================================================
         // Legacy-parameter back-fill (added for Crypta v0.3.0; generic, and
@@ -155,6 +184,21 @@ namespace basilica::presets
         // load/save/import. Safe to call from the message thread at any
         // time (lock-free atomic read).
         bool isDirty() const noexcept { return dirty.load (std::memory_order_relaxed); }
+
+        // Installs (or replaces) the two hooks described on
+        // PresetManagerConfig::captureExtraFields/applyExtraFields. A setter
+        // rather than a config field filled at construction because the
+        // callbacks need to capture the owning processor, which does not
+        // exist yet when the config struct is built (PresetManager is a
+        // member constructed in the processor's initialiser list). Message
+        // thread only, and in practice only ever called once at
+        // construction.
+        void setExtraFieldCallbacks (std::function<void (juce::DynamicObject&)> capture,
+                                      std::function<void (const juce::var&)> apply)
+        {
+            config.captureExtraFields = std::move (capture);
+            config.applyExtraFields = std::move (apply);
+        }
 
         //======================================================================
         // Loading = every APVTS parameter is first reset to its

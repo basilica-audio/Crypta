@@ -1,10 +1,15 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "dsp/SplitGap.h"
+#include "ir/BundledIrSource.h"
+#include "ir/IrLibrary.h"
 #include "params/ParameterIds.h"
 #include "params/ParameterLayout.h"
+#include "presets/IrReference.h"
 
 #include <BinaryData.h>
+
+#include <juce_cryptography/juce_cryptography.h>
 
 #include <cmath>
 
@@ -225,6 +230,65 @@ namespace
             { BinaryData::circuitKnife_json, BinaryData::circuitKnife_jsonSize },
         };
     }
+
+    // Crypta's embedded IRs, indexed by the SHA-256 of their bytes (issue
+    // #111, src/ir/BundledIrSource.h).
+    //
+    // One instance for the whole process rather than one per plugin
+    // instance: building it hashes every embedded IR, and a host with eight
+    // Cryptas on eight tracks has no reason to do that eight times. Both
+    // statics have static storage duration and this one is initialised from
+    // the other, so the asset vector is constructed first and destroyed last
+    // - no lifetime hazard from the pointers BundledIrSource keeps into it.
+    // Function-local static initialisation is thread-safe in C++11 and later.
+    const basilica::ir::BundledIrSource& bundledIrSource()
+    {
+        static const basilica::ir::BundledIrSource source { crypta::factoryIrAssets() };
+        return source;
+    }
+}
+
+//==============================================================================
+// The bundled factory IR library (issue #111), as embedded bytes in the
+// BinaryData-free shape src/ir/FactoryIrLibrary.h consumes. Derived from
+// getFactoryIRAssetTable() - the licence-barred table that already names
+// every cabinet - rather than duplicated, so the two lists cannot drift
+// apart. The three provenance files travel with the audio because the
+// licensing bar (#81) is a licence committed ALONGSIDE the audio: a
+// materialised or installed copy that left the provenance behind in the
+// repository would not meet it. None of the three is an audio file, so
+// BundledIrSource never indexes them as cabinets.
+const std::vector<basilica::ir::FactoryIrAsset>& crypta::factoryIrAssets()
+{
+    static const std::vector<basilica::ir::FactoryIrAsset> assets = []
+    {
+        std::vector<basilica::ir::FactoryIrAsset> list;
+
+        for (const auto& asset : CryptaAudioProcessor::getFactoryIRAssetTable())
+        {
+            // The table's data/fileName/stableId literals are string/array
+            // constants with static storage duration (BinaryData symbols and
+            // C string literals), so keeping the pointers past the table
+            // vector's lifetime is sound.
+            jassert (asset.fileName != nullptr && asset.stableId != nullptr);
+            list.push_back ({ asset.fileName,
+                              static_cast<const char*> (asset.data),
+                              asset.dataSizeBytes,
+                              asset.stableId });
+        }
+
+        // Provenance. BinaryData::CC01_0_txt, not CC0_1_0_txt:
+        // juce_add_binary_data drops the hyphen rather than mapping it to an
+        // underscore, so the symbol for "CC0-1.0.txt" is not the mechanical
+        // substitution it looks like.
+        list.push_back ({ "LICENSES.md",   BinaryData::LICENSES_md,   BinaryData::LICENSES_mdSize });
+        list.push_back ({ "CC0-1.0.txt",   BinaryData::CC01_0_txt,    BinaryData::CC01_0_txtSize });
+        list.push_back ({ "manifest.json", BinaryData::manifest_json, BinaryData::manifest_jsonSize });
+
+        return list;
+    }();
+
+    return assets;
 }
 
 //==============================================================================
@@ -368,6 +432,13 @@ CryptaAudioProcessor::CryptaAudioProcessor()
     jassert (gateRangeDb != nullptr);
 
     jassert (clipCeilingDb != nullptr);
+
+    // Preset -> IR references (issue #111): wire the capture/apply hooks
+    // into the member preset manager BEFORE the startup default below runs,
+    // so a user "Default" preset carrying a reference resolves it on
+    // construction like any other load.
+    installPresetIrCallbacks (presetManager);
+    refreshIrSearchRoots();
 
     // M2 default resolution: user "Default" preset > factory "Default"
     // preset > the ParameterLayout defaults apvts was just constructed with
@@ -1325,7 +1396,10 @@ void CryptaAudioProcessor::setStateInformation (const void* data, int sizeInByte
 //==============================================================================
 void CryptaAudioProcessor::loadImpulseResponse (juce::AudioBuffer<float> irBuffer, double irSampleRate)
 {
-    irLoader.loadImpulseResponse (std::move (irBuffer), irSampleRate);
+    // A raw buffer has no file bytes to hash, so the reference bookkeeping
+    // is cleared: a preset saved from this state records no IR reference,
+    // which is honest - there is nothing a digest could later resolve to.
+    applyLoadedImpulseResponse (std::move (irBuffer), irSampleRate, {}, {}, {});
 }
 
 std::vector<cryp::FactoryIRAsset> CryptaAudioProcessor::getFactoryIRAssetTable()
@@ -1361,25 +1435,29 @@ std::vector<cryp::FactoryIRAsset> CryptaAudioProcessor::getFactoryIRAssetTable()
           "Generated by tools/ir-synth/cabsynth.py, model id 'bass-810-cone'; "
           "CC0-1.0 dedication by Yves Vogl, Basilica Audio, 2026-08-22; "
           "provenance and SHA-256 in resources/irs/LICENSES.md",
-          BinaryData::modelled_8x10_cone_wav, BinaryData::modelled_8x10_cone_wavSize },
+          BinaryData::modelled_8x10_cone_wav, BinaryData::modelled_8x10_cone_wavSize,
+          "modelled_8x10_cone.wav", "bass-810-cone" },
 
         { "Modelled 8x10 Edge", "CC0-1.0",
           "Generated by tools/ir-synth/cabsynth.py, model id 'bass-810-edge'; "
           "CC0-1.0 dedication by Yves Vogl, Basilica Audio, 2026-08-22; "
           "provenance and SHA-256 in resources/irs/LICENSES.md",
-          BinaryData::modelled_8x10_edge_wav, BinaryData::modelled_8x10_edge_wavSize },
+          BinaryData::modelled_8x10_edge_wav, BinaryData::modelled_8x10_edge_wavSize,
+          "modelled_8x10_edge.wav", "bass-810-edge" },
 
         { "Modelled 1x15 Vintage", "CC0-1.0",
           "Generated by tools/ir-synth/cabsynth.py, model id 'bass-115-vintage'; "
           "CC0-1.0 dedication by Yves Vogl, Basilica Audio, 2026-08-22; "
           "provenance and SHA-256 in resources/irs/LICENSES.md",
-          BinaryData::modelled_1x15_vintage_wav, BinaryData::modelled_1x15_vintage_wavSize },
+          BinaryData::modelled_1x15_vintage_wav, BinaryData::modelled_1x15_vintage_wavSize,
+          "modelled_1x15_vintage.wav", "bass-115-vintage" },
 
         { "Modelled 4x10 Horn", "CC0-1.0",
           "Generated by tools/ir-synth/cabsynth.py, model id 'bass-410-horn'; "
           "CC0-1.0 dedication by Yves Vogl, Basilica Audio, 2026-08-22; "
           "provenance and SHA-256 in resources/irs/LICENSES.md",
-          BinaryData::modelled_4x10_horn_wav, BinaryData::modelled_4x10_horn_wavSize },
+          BinaryData::modelled_4x10_horn_wav, BinaryData::modelled_4x10_horn_wavSize,
+          "modelled_4x10_horn.wav", "bass-410-horn" },
     };
 }
 
@@ -1393,13 +1471,294 @@ bool CryptaAudioProcessor::loadFactoryImpulseResponse (int index)
     if (! factoryIRs.decode (index, irBuffer, irSampleRate))
         return false;
 
-    irLoader.loadImpulseResponse (std::move (irBuffer), irSampleRate);
+    // Issue #111 bookkeeping: the digest of the embedded FILE bytes (the
+    // same digest resources/irs/manifest.json records), so a preset saved
+    // with a factory cabinet up records a reference that resolves anywhere
+    // this binary runs. No file path - nothing was loaded from disk.
+    const auto* asset = factoryIRs.getAsset (index);
+    jassert (asset != nullptr); // decode() above succeeded for this index
+
+    juce::String contentHash, displayName;
+
+    if (asset != nullptr && asset->data != nullptr && asset->dataSizeBytes > 0)
+    {
+        contentHash = juce::SHA256 (asset->data, static_cast<size_t> (asset->dataSizeBytes))
+                          .toHexString().toLowerCase();
+
+        displayName = asset->fileName != nullptr
+                          ? basilica::presets::displayNameForIrFileName (asset->fileName)
+                          : juce::String (asset->name);
+    }
+
+    applyLoadedImpulseResponse (std::move (irBuffer), irSampleRate, contentHash, displayName, {});
+    return true;
+}
+
+bool CryptaAudioProcessor::loadImpulseResponseFromFile (const juce::File& file)
+{
+    juce::MemoryBlock fileBytes;
+
+    if (! file.existsAsFile() || ! file.loadFileAsData (fileBytes) || fileBytes.isEmpty())
+        return false;
+
+    juce::AudioBuffer<float> irBuffer;
+    double irSampleRate = 0.0;
+
+    // THE one decode path (see src/ir/BundledIrSource.h): file bytes go
+    // through exactly the decoder an embedded factory slot uses, so a
+    // resolved reference cannot sound different depending on which source
+    // produced the file. Decode first, install second, as above.
+    if (! cryp::FactoryIRLibrary::decodeFromMemory (fileBytes.getData(), fileBytes.getSize(),
+                                                     irBuffer, irSampleRate))
+        return false;
+
+    // The digest is computed from the very bytes that were decoded, not by
+    // re-reading the file - a rewrite between the read and a re-read could
+    // otherwise tag the loaded samples with somebody else's hash.
+    const auto contentHash = juce::SHA256 (fileBytes.getData(), fileBytes.getSize())
+                                 .toHexString().toLowerCase();
+
+    applyLoadedImpulseResponse (std::move (irBuffer), irSampleRate, contentHash,
+                                basilica::presets::displayNameForIrFile (file),
+                                file.getFullPathName());
     return true;
 }
 
 void CryptaAudioProcessor::clearImpulseResponse()
 {
     irLoader.clearImpulseResponse();
+
+    loadedIrBuffer.setSize (0, 0);
+    loadedIrSampleRate = 0.0;
+    currentIrContentHash.clear();
+    currentIrDisplayName.clear();
+    currentIrFilePath.clear();
+}
+
+void CryptaAudioProcessor::applyLoadedImpulseResponse (juce::AudioBuffer<float> irBuffer,
+                                                       double irSampleRate,
+                                                       const juce::String& contentHash,
+                                                       const juce::String& displayName,
+                                                       const juce::String& filePath)
+{
+    // The observable copy first (the buffer is about to be moved from).
+    loadedIrBuffer.makeCopyOf (irBuffer);
+    loadedIrSampleRate = irSampleRate;
+
+    irLoader.loadImpulseResponse (std::move (irBuffer), irSampleRate);
+
+    currentIrContentHash = contentHash;
+    currentIrDisplayName = displayName;
+    currentIrFilePath = filePath;
+}
+
+//==============================================================================
+// Preset -> IR references (issue #111). See src/presets/IrReference.h for why
+// the identifier is a hash of the file's BYTES and never its name or id, and
+// src/ir/BundledIrSource.h for the resolution model.
+
+void CryptaAudioProcessor::installPresetIrCallbacks (basilica::presets::PresetManager& manager)
+{
+    manager.setExtraFieldCallbacks (
+        [this] (juce::DynamicObject& presetObject) { capturePresetIrReferences (presetObject); },
+        [this] (const juce::var& presetObject) { applyPresetIrReferences (presetObject); });
+}
+
+std::vector<juce::File> CryptaAudioProcessor::getIrSearchRoots() const
+{
+    std::vector<juce::File> searchRoots;
+
+    const auto storedFolder = apvts.state.getProperty (ParamIDs::irLibraryFolderProperty,
+                                                       juce::String()).toString();
+
+    // A folder the user (or a test) explicitly pointed Crypta at comes
+    // first; the out-of-the-box location is included unconditionally so the
+    // documented "drop your IRs in ~/Music/Crypta/Impulse Responses" path
+    // keeps working when the property is set.
+    if (storedFolder.isNotEmpty())
+        searchRoots.push_back (juce::File (storedFolder));
+
+    searchRoots.push_back (basilica::ir::IrLibrary::defaultDirectory());
+
+    return searchRoots;
+}
+
+void CryptaAudioProcessor::refreshIrSearchRoots()
+{
+    irContentIndex.setSearchRoots (getIrSearchRoots());
+}
+
+juce::String CryptaAudioProcessor::bundledDisplayNameForContentHash (const juce::String& contentHash) const
+{
+    // Answered from the bytes actually embedded in this binary rather than
+    // from resources/irs/manifest.json, so a message can never claim an IR
+    // is "part of the bundled library" on the strength of a manifest entry
+    // whose audio did not ship.
+    return bundledIrSource().displayNameForContentHash (contentHash);
+}
+
+juce::File CryptaAudioProcessor::getBundledIrCacheDirectory() const
+{
+    return bundledIrCacheDirectoryOverride != juce::File()
+               ? bundledIrCacheDirectoryOverride
+               : basilica::ir::IrLibrary::bundledCacheDirectory();
+}
+
+void CryptaAudioProcessor::setBundledIrCacheDirectoryForTests (const juce::File& folder)
+{
+    bundledIrCacheDirectoryOverride = folder;
+}
+
+CryptaAudioProcessor::ResolvedIrReference
+CryptaAudioProcessor::resolveIrReference (const juce::String& contentHash)
+{
+    const auto wanted = contentHash.trim().toLowerCase();
+
+    // Nothing to resolve. Kept separate from notFound because they mean
+    // different things to the caller: this raises no notice, a miss does.
+    if (wanted.isEmpty())
+        return { IrReferenceSource::notReferenced, {} };
+
+    // A digest that is not a digest cannot be satisfied by anything, so it
+    // is a MISS rather than "no reference" - the preset meant to name an IR
+    // and failed to, and saying so is more honest than pretending it named
+    // nothing. Validated here as well as inside both sources so the outcome
+    // does not depend on which source is asked first.
+    if (wanted.length() != 64 || ! wanted.containsOnly ("0123456789abcdef"))
+        return { IrReferenceSource::notFound, {} };
+
+    // Already exactly these bytes: leave the convolver alone rather than
+    // reloading it, so recalling a preset for the cab that is already up
+    // costs nothing and cannot glitch. Compared against the digest of the
+    // bytes the engine actually holds (recorded at load time), so a file
+    // rewritten on disk after it was loaded cannot make this lie.
+    if (currentIrContentHash == wanted)
+        return { IrReferenceSource::alreadyLoaded, juce::File (currentIrFilePath) };
+
+    refreshIrSearchRoots();
+
+    // PRECEDENCE (basilica-audio/Nave#45, adopted by #111): the user's
+    // library first, Crypta's embedded copy only after it.
+    //
+    // The ordering is not a tie-break between two different sounds - a
+    // digest can only match bytes equal to it, so when both sources hold it
+    // they hold the same audio, and there is no "mismatch between the
+    // sources" to surface. What the ordering decides is which FILE the slot
+    // ends up pointing at, and the user's own copy is the right answer
+    // there: it is the one they can see, rename, move, replace and audition.
+    if (const auto fromLibrary = irContentIndex.findByContentHash (wanted); fromLibrary.existsAsFile())
+        return { IrReferenceSource::library, fromLibrary };
+
+    if (const auto materialised = bundledIrSource().materialiseByContentHash (wanted, getBundledIrCacheDirectory());
+        materialised.existsAsFile())
+        return { IrReferenceSource::bundled, materialised };
+
+    return { IrReferenceSource::notFound, {} };
+}
+
+void CryptaAudioProcessor::capturePresetIrReferences (juce::DynamicObject& presetObject)
+{
+    // Writes nothing at all when the slot holds no tracked IR (identity
+    // passthrough, or a raw buffer of unknown provenance), so such a preset
+    // is byte-identical to what the pre-#111 saver produced.
+    if (currentIrContentHash.isEmpty())
+        return;
+
+    basilica::presets::PresetIrReferences references;
+    references.slotA.contentHash = currentIrContentHash;
+    references.slotA.displayName = currentIrDisplayName;
+
+    basilica::presets::writeIrReferences (presetObject, references);
+}
+
+void CryptaAudioProcessor::applyPresetIrReferences (const juce::var& presetObject)
+{
+    // Every preset load replaces the previous one's notice - including a
+    // load that has nothing to report, which clears it. The listener is told
+    // on EVERY change, empty string included: a listener that only ever
+    // heard about misses would keep showing a message about a preset the
+    // user has since moved on from. Hence the single publishing exit below
+    // rather than an early return.
+    const auto previousNotice = presetIrNotice;
+    presetIrNotice.clear();
+
+    const auto publish = [this, &previousNotice]
+    {
+        if (onPresetIrNotice != nullptr && presetIrNotice != previousNotice)
+            onPresetIrNotice (presetIrNotice);
+    };
+
+    const auto references = basilica::presets::readIrReferences (presetObject);
+
+    // Crypta has ONE IR slot and applies slot "a" only (see the note on
+    // basilica::presets::PresetIrReferences). A hand-edited document
+    // carrying only "b" therefore resolves nothing here - deliberately, and
+    // silently: Crypta never writes such a file, and a foreign plugin's
+    // presets are refused by parseAndValidate() long before this hook runs.
+    const auto& reference = references.slotA;
+
+    if (! reference.isPresent())
+    {
+        // The overwhelmingly common case, and it costs no file I/O.
+        publish();
+        return;
+    }
+
+    const auto resolved = resolveIrReference (reference.contentHash);
+
+    switch (resolved.source)
+    {
+        case IrReferenceSource::notReferenced:
+        case IrReferenceSource::alreadyLoaded:
+            publish();
+            return;
+
+        case IrReferenceSource::library:
+        case IrReferenceSource::bundled:
+            if (loadImpulseResponseFromFile (resolved.file))
+            {
+                publish();
+                return;
+            }
+
+            // The file was found and hashes correctly but would not decode
+            // (a WAV variant the reader does not handle, a truncation that
+            // happened between the hash and the read). Falls through to the
+            // miss path rather than being swallowed: a slot that did not get
+            // filled must say so.
+            break;
+
+        case IrReferenceSource::notFound:
+            break;
+    }
+
+    // MISS. The parameters have already been applied, the slot keeps
+    // whatever was in it, and NOTHING is substituted - a different cabinet
+    // loaded here would be the silent-wrong-sound failure the content hash
+    // exists to prevent. All that is left to do is say what was expected.
+    const auto bundledName = bundledDisplayNameForContentHash (reference.contentHash);
+
+    auto expectedName = reference.displayName.trim();
+
+    if (expectedName.isEmpty())
+        expectedName = bundledName;
+
+    if (expectedName.isEmpty())
+        expectedName = reference.contentHash.substring (0, 12); // a preset that named nothing
+
+    presetIrNotice = TRANS ("This preset was made with NAME, which is not in your IR library.")
+                         .replace ("NAME", "\"" + expectedName + "\"")
+                     + " "
+                     + TRANS ("Its settings were loaded and the IR slot was left as it was.");
+
+    // A bundled digest reaching the miss path means the embedded copy could
+    // not be written to disk (an unwritable or full location) - there is no
+    // install step whose absence could explain it. Say so instead of hinting
+    // at a step that does not exist.
+    if (bundledName.isNotEmpty())
+        presetIrNotice += " " + TRANS ("Crypta could not write out its own copy of it.");
+
+    publish();
 }
 
 //==============================================================================

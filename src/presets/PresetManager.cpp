@@ -206,6 +206,13 @@ namespace basilica::presets
 
         applyPlainValues (obj->getProperty (parametersKey));
 
+        // Plugin-specific extras (Crypta: the optional IR reference), applied
+        // last so the hook sees fully settled, already-back-filled parameter
+        // values. Called even when the document carries no extra fields -
+        // see the hook's docs in PresetManager.h.
+        if (config.applyExtraFields != nullptr)
+            config.applyExtraFields (parsed);
+
         currentPresetName = name;
         currentPresetIsFactory = isFactory;
 
@@ -257,6 +264,13 @@ namespace basilica::presets
         obj->setProperty (nameKey, name);
         obj->setProperty (categoryKey, category);
         obj->setProperty (parametersKey, juce::var (parametersObj));
+
+        // Plugin-specific extras. A hook that adds nothing (or no hook at
+        // all) leaves this document exactly as it was before the mechanism
+        // existed, which is what keeps presets that carry no extras
+        // byte-identical across builds.
+        if (config.captureExtraFields != nullptr)
+            config.captureExtraFields (*obj);
 
         return juce::var (obj);
     }
@@ -464,14 +478,23 @@ namespace basilica::presets
         if (parsed.isVoid())
             return false;
 
+        // A rename changes the name and NOTHING else, so the renamed file is
+        // the original document with one property replaced rather than a
+        // freshly built one. Building it would stamp the CURRENT live APVTS
+        // values and this build's pluginVersion over a preset the user only
+        // asked to relabel - and, since PresetManagerConfig::captureExtraFields
+        // may add plugin-specific keys (Crypta's IR reference), would also have
+        // to know which of those keys to carry over. Copying every property
+        // needs no such list and cannot silently drop one.
         auto* obj = parsed.getDynamicObject();
-        const auto renamed = buildPresetVar (newName, obj->getProperty (categoryKey).toString());
+        auto* renamedObj = new juce::DynamicObject();
 
-        // buildPresetVar() above stamps the *current live* APVTS values, not
-        // necessarily the renamed preset's own saved values - overwrite its
-        // parameters with the original file's, so a rename never silently
-        // mutates the preset's content.
-        renamed.getDynamicObject()->setProperty (parametersKey, obj->getProperty (parametersKey));
+        for (const auto& property : obj->getProperties())
+            renamedObj->setProperty (property.name, property.value);
+
+        renamedObj->setProperty (nameKey, newName);
+
+        const juce::var renamed (renamedObj);
 
         if (! writePresetVarToFile (renamed, userPresetFileFor (newName)))
             return false;

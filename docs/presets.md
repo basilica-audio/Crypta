@@ -2,10 +2,18 @@
 
 Nine factory presets ship with Crypta's v0.2.0 M2 preset system. All settings are starting
 points designed against the research-derived v0.2.0 defaults (`docs/design-brief.md`'s Factory
-Presets section), not exact renders against any reference material. `IR Enable` presets below
-turn the IR loader stage on but do not load an actual impulse response - v0.2.0 does not yet
-bundle factory cabinet IRs (same as v0.1.x; see `docs/manual.md`), so those presets currently
-run the loader in its safe-by-default identity-passthrough state until a user loads their own IR.
+Presets section), not exact renders against any reference material.
+
+Since issue #111 a preset may carry an **optional IR reference** — the SHA-256
+of the impulse-response file it was voiced with (see `src/presets/IrReference.h`).
+It resolves against the user's IR library folder first
+(`~/Music/Crypta/Impulse Responses`) and Crypta's own embedded bundle second,
+so a factory preset that names a bundled cabinet sounds as made on a fresh
+install with nothing on disk. A reference that cannot be resolved degrades
+loudly and safely: the preset's settings load, the IR slot keeps whatever it
+had, nothing is substituted, and a notice names the missing cabinet
+(`CryptaAudioProcessor::getPresetIrNotice()`). Presets without a reference
+(all pre-#111 presets) behave exactly as before.
 
 | Preset | Category | Intent |
 |---|---|---|
@@ -17,4 +25,4 @@ run the loader in its safe-by-default identity-passthrough state until a user lo
 | **Cut Through** | Bass | Drop-tuned rhythm use case: both splits pushed up so more note body reaches the distorted bands. |
 | **Definition Only** | Bass | Showcases the high band's harshness-control role: Tight pulled up, Drive kept moderate, EQ presence bump engaged. |
 | **Clean Low, Loud Top** | Bass | Low band audibly present but mostly uncompressed (Mix pulled down), mid/high pushed harder. |
-| **Cab-Colored Grind** | Bass | Demonstrates the v0.2.0-relocated IR loader coloring only the Mid+High path while the low end stays uncolored. |
+| **Cab-Colored Grind** | Bass | Demonstrates the v0.2.0-relocated IR loader coloring only the Mid+High path while the low end stays uncolored. References the bundled **Modelled 8x10 Cone** cabinet (issue #111), so it sounds as made out of the box. |
