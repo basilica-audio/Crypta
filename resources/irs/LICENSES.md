@@ -150,6 +150,45 @@ No file contains a clipped sample, a non-finite sample, or a DC offset above
 plugin's own decoder and convolution path, so a regression fails the build
 rather than the release.
 
+## Release rules
+
+Adopted with the bundled-IR resolution model (issue #111, following
+basilica-audio/Nave's curation decision, Nave#48):
+
+- **Rename freely.** A cabinet's identity is its model id (`bass-810-cone`,
+  …), which lives in `manifest.json` and in
+  `CryptaAudioProcessor::getFactoryIRAssetTable()`. Presets never resolve by
+  name, so a rename changes nothing they depend on.
+- **Never retune in place.** Presets resolve by the SHA-256 of the file's
+  bytes. A retuned model changes the bytes, so every existing reference to it
+  would miss — loudly, which is the designed behaviour, but it turns a
+  "voicing tweak" into a breaking change for every preset ever saved with
+  that cabinet. A genuinely better voicing ships as a **new** model with a
+  new id and a new file.
+- **Removal is a major-version break.** Once shipped, a cabinet's digest is
+  referenced by user presets forever after. `tests/BundledIrCurationTests.cpp`
+  pins the shipped set, so a removal cannot pass review unnoticed.
+
+## Footprint
+
+The bundle costs what this table says it costs, measured from the bytes
+actually compiled into the binary — `tests/BundledIrCurationTests.cpp` fails
+the build if the figures drift (including when this file itself is edited:
+it ships inside the binary too, so its own size is part of the figure and the
+test constants must be updated in the same change).
+
+| What | Files | Bytes |
+|---|---|---|
+| Audio | 4 × `modelled_*.wav` | 49,328 |
+| Provenance | `LICENSES.md`, `CC0-1.0.txt`, `manifest.json` | 24,296 |
+| **Total** | | **73,624** |
+
+`.gitattributes` marks everything under `resources/` as `-text` so these are
+the same bytes on every platform — Git's default line-ending conversion on
+Windows would otherwise grow every embedded *text* asset by one byte per line
+and make the shipped provenance differ from the committed one (the failure
+Nave#48 caught on Windows CI).
+
 ## How to add one
 
 1. If it is generated: add the model to `tools/ir-synth/cabsynth.py`, re-run it

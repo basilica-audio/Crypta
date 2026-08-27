@@ -107,6 +107,17 @@ namespace ParamIDs
     inline constexpr auto irEnabled = "irEnabled";
     inline constexpr auto irMix = "irMix";
 
+    // NON-PARAMETER STATE property (issue #111): the folder preset -> IR
+    // references resolve against BEFORE Crypta's embedded bundle (see
+    // CryptaAudioProcessor::getIrSearchRoots and src/ir/BundledIrSource.h's
+    // precedence note). Stored on apvts.state as a plain property rather
+    // than a parameter - it is a path, not an automatable value. Empty (the
+    // production default; there is no UI for it yet) means "just the
+    // out-of-the-box location", basilica::ir::IrLibrary::defaultDirectory().
+    // Same name as the suite pilot's (basilica-audio/Nave), so a future IR
+    // browser can adopt it without a migration.
+    inline constexpr auto irLibraryFolderProperty = "irLibraryFolder";
+
     //==============================================================================
     // v0.3.0 "circuit-grade bass engine" additions (12 IDs, 39 -> 51 total).
     //
