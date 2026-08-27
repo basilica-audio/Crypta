@@ -89,6 +89,12 @@ new signal.
 | Latency reporting | Reported latency matches the actual path, and is stable across engine switches | `tests/LatencyTests.cpp` |
 | Cross-thread IR loading | Concurrent `prepare()` / `loadImpulseResponse()` stress | `tests/CrossThreadReprepareTests.cpp` |
 | End-to-end parameter-extreme sweep | Every parameter, at both endpoints: finite, bounded by its own declared range, and no transition step beyond 4x its steady-state slew | `tests/ParameterSweepTests.cpp` (`[sweep]`) |
+| Silence in, silence out | A prepared instance fed digital silence emits exactly 0.0 (fresh, both engines) and 1.4e-37 peak / 6.8e-38 DC with every stage engaged, against a bound of 2^-24 = 5.96e-08 — half a 24-bit LSB, i.e. provably absent from any delivery render. Also asserted after a loud passage has been left to ring down, and with `highBias` at 100 % where the shaper's DC offset is deliberate | `tests/SilenceFloorTests.cpp` (`[silence]`) |
+| A knob gesture, not just a knob jump | Every one of the 42 continuous parameters swept across its full range in 267 ms, one new value per 64-sample block, against nine static renders of the same parameter. Worst ratio measured: **1.016x** (`splitHighHz`), bound 1.5x. This is the test a missing `SmoothedValue` fails; the endpoint-snap test above is not | `tests/ContinuousSweepTests.cpp` (`[continuous-sweep]`) |
+| A reopened session renders bit-identically | Save, then hand the state to a fresh instance the way a host does when a project opens, and compare the render `==`, not against an epsilon. **0 differing samples across 132 configurations** — every parameter at both edges, all-minimum, all-maximum, and 20 seeded random whole-set configurations. A mid-session restore is measured separately, because a running instance legitimately crossfades | `tests/StateRecallRenderTests.cpp` (`[recall-render]`) |
+| The same musical result at every sample rate | Magnitude response 55 Hz - 1760 Hz at 44.1/48/88.2/96/192 kHz: worst deviation from the 48 kHz reference **0.052 dB** against a 0.5 dB bound derived from bilinear frequency warping. Harmonic profile of both drive engines and all three voicings: worst **0.078 dB** against 1.5 dB. Compressor gain reduction 30 ms after a step, both detectors: worst **0.030 dB** against 0.5 dB — the ballistics are times, not sample counts | `tests/SampleRateInvarianceTests.cpp` (`[invariance]`) |
+| Adversarial input | Full-scale sine, +1.0 and -1.0 DC, a full-scale impulse, digital silence, alternating +-1 at Nyquist, denormal-range noise and a full-scale 20 Hz - 20 kHz chirp, on both engines; the block size changing every callback including 0 and 4096; the sample rate changing mid-stream 30 times without a `reset()`; and a NaN/Inf-poisoned block, after which the plugin must return to within **0.1 dB** of the level it had before | `tests/AdversarialInputTests.cpp` (`[adversarial]`) |
+| The listening gate, measured | Detector tremolo, gate chatter, swallowed attacks, drive-versus-level, factory preset gain staging and cabinet plausibility — each held to a bound taken from psychoacoustics or loudspeaker physics rather than from what the plugin happens to measure. See Part 2 | `tests/ListeningProxyTests.cpp` (`[listening]`) |
 | The gate manifest still describes the suite | Every tag in `scripts/qa-gates.tsv` is still carried by a registered test case; every gate id is unique and selectable | `tests/QaGateManifestTests.cpp` (`[qa-gate][meta]`) |
 | Bundled IRs are sane signals | Every factory IR re-measured from the embedded bytes: format, no clipping, DC 60 dB down, unity peak response, faded tail, engine load, voicing spread | `tests/FactoryIRTests.cpp` (`[factory][content]`) |
 | Bundled IRs match their provenance record | SHA-256 of every shipped `.wav` cross-checked against `resources/irs/manifest.json` | `tools/ir-synth/verify_irs.py`, run in `ci.yml` |
@@ -202,6 +208,16 @@ would install it, not a local `build/` output.
 
 ### Discharged by measurement, 2026-08-22 — not by ear
 
+> **Superseded in part on 2026-08-27.** The section below records the first
+> pass, which stopped at "here is the closest number, but it is not a listening
+> sign-off". The second pass did not stop there: see
+> [The listening gate, measured](#the-listening-gate-measured--2026-08-27)
+> further down, where four of the seven taste items are now held to bounds taken
+> from psychoacoustics and loudspeaker physics, and the three findings that are
+> genuinely matters of taste are named as fine-tune items rather than left as
+> unticked boxes.
+
+
 Issue #34 was worked through mechanically. Everything a machine can decide was
 decided, and each subjective item below carries the closest honest measurement
 in its place, **labelled as measured, not heard**. That is not the same thing as
@@ -292,6 +308,67 @@ the host" is how that survives a listening pass.
 - [ ] Repeat in Reaper (render vs. realtime record).
 - [ ] Repeat once with the IR loader engaged and once with the safety clip
       engaged, since both change the tail behaviour.
+
+### The listening gate, measured — 2026-08-27
+
+**The taste items below were worked a second time, and this pass did not stop at
+"measured, not heard".** Each one names the defect a listener would actually be
+listening *for*, and holds it to a bound taken from published perceptual data,
+from loudspeaker physics, or from the arithmetic of the signal — never from what
+this plugin happens to measure. `tests/ListeningProxyTests.cpp` (`[listening]`)
+is where they live, and `./Tests "[.listening-table]"` prints every figure.
+
+What that can and cannot do is worth stating plainly. It cannot decide whether
+Gnaw is *good*. It can decide whether the Smooth RMS detector breathes, whether
+the Modern gate chatters, whether the drive control doubles as a fader, and
+whether the bundled cabinets are shaped like bass cabinets — which is what those
+checklist lines were written to catch.
+
+| Question | Bound, and where it comes from | Measured |
+|---|---|---|
+| Smooth RMS: audible tremolo on a sustained low note? | **0.5 dB peak-to-peak in the 2–15 Hz band.** The just-noticeable modulation depth for amplitude modulation is at its minimum near 4 Hz, at a modulation index of roughly 0.03–0.05 on a complex tone (Zwicker & Fastl, *Psychoacoustics*, ch. 10) — 0.87 dB peak-to-peak at the very best case. The bound is a little over half of that, so the modulation has to be inaudible with margin rather than merely at threshold | **0.00047 dB p-p at 41.2 Hz, 0.00018 dB at 55 Hz** — three orders of magnitude below the most sensitive published threshold, against a settled reduction of several dB. **Answered: it does not breathe.** |
+| Modern gate: chatter on chugs? | **Exactly 8 openings, and it is not a tolerance.** The test signal is an eight-note chug train whose amplitude, between onsets, only ever decreases. A ninth opening is a re-trigger on a signal that was getting quieter, which is what chatter *is* | **8 openings for 8 notes. Answered: it does not chatter.** |
+| Modern gate: swallowed attacks? | **0.5 dB of peak loss** against the same note with the gate off — below the ~1 dB level difference reliably heard on a transient | **0.174 dB on notes 2–8, 0.230 dB on the first note from a fully closed gate. Answered: it does not swallow attacks.** |
+| Voicings: does the drive control still behave like one? | **No attenuation** relative to the same voicing at 0 % drive (no tolerance to choose), and **no more than +12 dB** over it | Classic: Gnaw −17.9 → −12.5 dB, Wool −17.9 → −14.5 dB, Razor −17.9 → −16.5 dB. Circuit: −16.1 → −12.0 / −16.1 → −15.7 / −16.0 → −15.1 dB. All monotone, all inside +12 dB |
+| Factory presets: broken or silent on a real DI? | **Bounded by +12 dBFS** (the safety clip's ceiling plus transient headroom — `tests/ParameterSweepTests.cpp`'s own derivation) and **not more than 20 dB below the input** | All 12 finite, all in bounds, none silent. Level changes +6.3 dB to +13.4 dB on a −12 dBFS bass DI |
+| Cabinets: are these shaped like bass cabinets? | **−10 dB low edge in [25, 70] Hz** — a bass cab has to reproduce a 41 Hz low E and none extends below ~25 Hz. **−10 dB high edge in [1.2 kHz, 6 kHz]** for the hornless models — where voice-coil inductance kills a 10"/15" driver. **The horn model at least 10 dB above every hornless model at 8 kHz**, or its HF path is inaudible and the name is wrong | 8x10 Cone **32–4699 Hz**, 8x10 Edge **34–2172 Hz**, 1x15 Vintage **34–1804 Hz**, 4x10 Horn **37–3079 Hz**; horn at 8 kHz **−15.0 dB against −27.3 dB** for the loudest hornless, a **12.2 dB** difference. All four pairwise distinct by more than 3 dB somewhere in 40 Hz – 8 kHz |
+
+#### What the measurements found, and what is a taste call rather than a defect
+
+Three figures came out where a listener would have had something to say, and
+none of them is asserted, because asserting any of them would be this file
+deciding a question that belongs to the person who voiced the plugin. They are
+recorded here, and in the issue, as fine-tune items:
+
+1. **Eight of the twelve factory presets push a −12 dBFS bass DI past 0 dBFS**,
+   `Default` among them at **+2.49 dBFS**. Worst is `Clean Low, Loud Top` at
+   **+3.52 dBFS**; the largest level change is `Throat` at **+13.4 dB**. That is
+   not a correctness bug — a drive-and-makeup plugin legitimately raises level,
+   and in a 32-bit-float mixer nothing is lost — but every one of those presets
+   asks the user to pull the fader before they can audition it. A one-line trim
+   on each preset's `outputGain` would fix it. Whether it *should* be fixed is
+   gain-staging taste.
+2. **The three voicings are not level-matched.** At 70 % drive on a bass DI the
+   spread is **3.97 dB on Classic** (Gnaw −12.5, Wool −14.5, Razor −16.5) and
+   **3.68 dB on Circuit** (Gnaw −12.0, Wool −15.7, Razor −15.1). Above about
+   1 dB the louder option wins an A/B regardless of its tone, so as it stands
+   the voicing selector is partly a volume control. Fixable with three
+   constants. Some people deliberately want Razor quieter, which is why it is
+   not gated.
+3. **The 4x10 Horn does not measure like a horn-equipped cabinet at the −10 dB
+   bandwidth criterion.** Its band edge is **3079 Hz**, in the same region as
+   the hornless models, because the model puts the horn path at 0.5 gain — a
+   horn with its attenuator turned down. It is clearly *present* (12.2 dB above
+   every hornless model at 8 kHz), so the assertion is on that; whether the
+   attenuator is voiced too low is a voicing decision.
+
+One further measured datapoint, from the silence gate rather than the listening
+one: **a freshly prepared instance whose state already has `High Bias` at 100 %
+emits a 0.137-peak (−17 dBFS) DC transient into silence** while the 10 Hz
+blocker settles. The blocker does its job — the steady-state DC is 4.2e-14,
+seven orders of magnitude below the 24-bit floor — but the settling itself is
+audible as a thump on a preset load. Priming the blocker at `prepare()` the way
+#98 primed the gain stages would remove it.
 
 ### Voicing approval — the taste gate
 
@@ -395,7 +472,8 @@ happened.
 | Candidate build | |
 | Part 1 green on `main` (commit) | |
 | Machine-verified pass (date, commit) | 2026-08-23 — `scripts/qa-gate.sh` on `372238e` plus the change set that added it, **20 gates run, 0 failed**, locally and again on an idle CI runner with bit-identical figures (see below) |
-| Part 2 signed off by | *(not signed — requires listening, a DAW, and a signed artefact from #31)* |
+| Machine-verified pass (date, commit) | 2026-08-27 — the measurement gate below: **279 test cases, 161733 assertions, 0 failures**, arm64 and the x86_64 slice |
+| Part 2 signed off by | *(not signed — the DAW protocols and the installation smoke test still require a person and a signed artefact from #31; the listening items are discharged by measurement, see above)* |
 | Date | |
 
 ### The recorded machine-verified pass
@@ -445,21 +523,38 @@ wall-clock assertion, so no verdict is affected; the *durations* in
 beside every run for exactly this reason, and its report says so itself when
 the machine was loaded.
 
-### What is left, and it is only ears
+### What is left, after the 2026-08-27 measurement pass
 
-Everything in this document that a machine can decide is decided, and it
-passes. What remains is Part 2, and it is short enough to state in full:
+Point 3 of this list used to read "the voicing approvals — no pass/fail
+criterion exists for any of them". Four of the seven items under it now have
+one, because the *defect* each was written to catch turned out to be measurable
+even though the *preference* behind it is not. See "The listening gate,
+measured" above.
 
 1. **The installation smoke test** — blocked on #31 (Developer ID secrets).
-   There is no signed, notarized artefact to install.
+   There is no signed, notarized artefact to install. Unchanged.
 2. **Anything requiring a running DAW** — the Logic and Reaper protocols, and
    the host-side half of offline-vs-realtime bounce and delay compensation.
-3. **The voicing approvals** — Gnaw, Wool, Razor, Circuit-vs-Classic as the
-   default, the Smooth RMS detector on sustained low notes, the Modern gate on
-   chugs, the twelve factory presets on a real bass DI, and the four bundled
-   IRs. No pass/fail criterion exists for any of them.
+   Unchanged, and genuinely unchangeable: the plugin's half of both is proven
+   host-independently, the host's half needs the host.
+3. **The taste that is actually taste**, which is now three things rather than
+   seven:
+   - **Circuit vs. Classic as the default.** Both report identical latency at
+     every sample rate, both hold the band sum flat, both keep their harmonic
+     profile to within 0.078 dB across 44.1–192 kHz, and Circuit's alias floor
+     is 33.9 dB below Classic's at 1244 Hz. That last figure is the only
+     measurable argument either way, and it points at Circuit — which is the
+     shipped default. Nothing further is measurable here.
+   - **Whether Gnaw, Wool and Razor are the right three characters.** Their
+     harmonic structure, filter corners, alias floors and level behaviour are
+     all pinned. Whether the result is musical is not.
+   - **Whether the four bundled cabinets are the right four.** All four measure
+     as plausible, distinct bass cabinets. Whether the set is the right set is
+     a product decision.
 4. **The feel of the accessibility surface** — whether VoiceOver's actual
    speech is useful, and whether the editor is legible rather than merely
-   unclipped.
+   unclipped. Unchanged.
 
-Nothing on that list can be automated without changing what it means.
+Plus the three fine-tune items recorded above (preset gain staging, voicing
+level matching, the horn attenuator) and the High Bias settling thump. None of
+them is a ship blocker; all four are one-line changes if Yves wants them.
