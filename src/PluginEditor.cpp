@@ -1,6 +1,5 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
-#include "params/ParameterIds.h"
 #include "presets/Localisation.h"
 
 #include <BinaryData.h>
@@ -10,57 +9,45 @@
 
 namespace
 {
-    // ----- Vector-editor layout metrics (issue #25) -----------------------
-    // All values are design constants, not measurements of pre-rendered art
-    // (there is none): the editor computes its own design size from these
-    // plus the control tables in the constructor, and
-    // tests/gui/EditorLayoutTests.cpp asserts the resulting geometry
-    // (containment, no overlap, full parameter coverage) on the real
-    // component tree, so a change here can never silently clip a control.
-    constexpr int outerMargin = 10;
-    constexpr int presetBarHeight = 30;
-    constexpr int bandGap = 8;
+    // ----- Gilded typography styles (PlateTypography, EB Garamond) --------
+    // Raised warm-gold lettering with a soft drop shadow below - the
+    // tenebrae "gilded lettering on dark ground" convention (its
+    // EditorTypographyTests fixture uses the same ink), correct for this
+    // near-black gloss plate; requiem's dark-ink engraved read is for
+    // bright metal grounds only.
+    constexpr juce::uint32 wordmarkInk = 0xf0d9ae62;
+    constexpr juce::uint32 captionInk = 0xb3c9a05a;
+    constexpr juce::uint32 sectionInk = 0xe6c9a05a;
+    constexpr juce::uint32 controlInk = 0xd8c39a55;
+    constexpr juce::uint32 letterShadow = 0x99000000;
 
-    constexpr int panelPadding = 10;
-    constexpr int panelBottomPadding = 8;
-    constexpr int rowGap = 8;
+    constexpr float controlLabelHeight1x = 10.5f;
 
-    // A knob slot: attached label above (JUCE 8.0.14 Label::
-    // componentMovedOrResized sizes an above-attached label to
-    // borderTopAndBottom + 6 + fontHeight ~ 22 px for the 14 px suite
-    // serif, so 24 reserved keeps it clear of the row above), then the
-    // rotary area, then the value box baked into the slider's own bounds.
-    constexpr int labelHeight = 24;
-    constexpr int knobSize = 60;
-    constexpr int textBoxHeight = 16;
-    constexpr int knobSlotWidth = 80;
-    constexpr int toggleSlotWidth = 66;
-    constexpr int toggleHeight = 24;
-    constexpr int slotGap = 6; // trimmed off the right of every slot
-    constexpr int rowHeight = labelHeight + knobSize + textBoxHeight;
+    // Engraved section rules: a dark incision line with a lit gold lip
+    // below, the same lighting logic as the lettering.
+    constexpr juce::uint32 ruleInk = 0xcc10100e;
+    constexpr juce::uint32 ruleLip = 0x59c9a05a;
 
-    // Right-hand meter bay on the four metered panels.
-    constexpr int meterBayWidth = 150;
-    constexpr int meterWidth = 134;
-    constexpr int meterHeight = 96;
-
-    // Peak metering floor: the dB value a silent block maps to, matching
-    // basilica::gui::NeedleMeter::restingDbFor (Scale::peakLevelDb).
-    constexpr float peakMeterFloorDb = -100.0f;
+    // Peak metering floor for the VU pair: a silent block maps here and
+    // the needle rests on the dial's -20 stop.
+    constexpr float peakMeterFloorDb = -60.0f;
 
     // M2 i18n frame: selects German (resources/i18n/de.txt) or falls
-    // through to English, once, at editor construction - see
-    // Localisation.h's docs. `presetBar` is a member initialised via the
-    // constructor's initialiser list, and its own constructor already calls
-    // TRANS() on every button label - member initialisers run in
-    // declaration order, so this helper (called from presetBar's own
-    // initialiser expression below) is what guarantees installLocalisation()
-    // runs before presetBar exists, not a call in the constructor *body*,
-    // which would run too late.
+    // through to English, once, at editor construction. `presetBar` is a
+    // member initialised via the constructor's initialiser list, and its
+    // own constructor already calls TRANS() on every button label - member
+    // initialisers run in declaration order, so this helper (called from
+    // presetBar's own initialiser expression below) is what guarantees
+    // installLocalisation() runs before presetBar exists.
     basilica::presets::PresetManager& initLocalisationThenGetPresetManager (CryptaAudioProcessor& processor)
     {
         basilica::presets::installLocalisation (BinaryData::de_txt, BinaryData::de_txtSize);
         return processor.presetManager;
+    }
+
+    float linearPeakToDb (float linearPeak)
+    {
+        return juce::Decibels::gainToDecibels (linearPeak, peakMeterFloorDb);
     }
 }
 
@@ -71,541 +58,425 @@ const juce::Identifier& CryptaAudioProcessorEditor::getScaleStatePropertyId() no
     return id;
 }
 
-double CryptaAudioProcessorEditor::readPersistedScale (const juce::ValueTree& state) noexcept
+int CryptaAudioProcessorEditor::readPersistedScaleStepIndex (const juce::ValueTree& state) noexcept
 {
     if (! state.hasProperty (getScaleStatePropertyId()))
-        return defaultEditorScale;
+        return defaultScaleStepIndex;
 
     const auto stored = (double) state.getProperty (getScaleStatePropertyId());
 
-    // A hand-edited or corrupt session must not be able to produce a
-    // zero-sized (or absurdly huge) window.
     if (! std::isfinite (stored) || stored <= 0.0)
-        return defaultEditorScale;
+        return defaultScaleStepIndex;
 
-    return juce::jlimit (minimumEditorScale, maximumEditorScale, stored);
+    // Snap to the nearest step - the previous editor generation persisted
+    // a continuous scale in the same slot.
+    int best = defaultScaleStepIndex;
+    double bestDistance = std::numeric_limits<double>::max();
+
+    for (size_t i = 0; i < scaleSteps.size(); ++i)
+    {
+        const auto distance = std::abs (stored - (double) scaleSteps[i]);
+
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            best = (int) i;
+        }
+    }
+
+    return best;
+}
+
+//==============================================================================
+CryptaAudioProcessorEditor::Manifest CryptaAudioProcessorEditor::parseLayoutManifest()
+{
+    Manifest result;
+
+    int jsonSize = 0;
+    const auto* jsonData = BinaryData::getNamedResource ("layoutmanifest_json", jsonSize);
+    jassert (jsonData != nullptr);
+
+    if (jsonData == nullptr)
+        return result;
+
+    const auto parsed = juce::JSON::parse (juce::String::fromUTF8 (jsonData, jsonSize));
+    jassert (parsed.isObject());
+
+    if (! parsed.isObject())
+        return result;
+
+    if (const auto* plate = parsed.getProperty ("plate", {}).getDynamicObject())
+    {
+        result.plateBinary = plate->getProperty ("binary").toString();
+        result.plateWidth1x = (int) plate->getProperty ("width1x");
+        result.plateHeight1x = (int) plate->getProperty ("height1x");
+    }
+
+    if (const auto* sprites = parsed.getProperty ("sprites", {}).getDynamicObject())
+    {
+        for (const auto& [name, value] : sprites->getProperties())
+        {
+            if (const auto* obj = value.getDynamicObject())
+            {
+                SpriteSpec spec;
+                spec.binary = obj->getProperty ("binary").toString();
+                spec.width = (float) obj->getProperty ("width");
+                spec.height = (float) obj->getProperty ("height");
+                spec.knobCx = (float) obj->getProperty ("knobCx");
+                spec.knobCy = (float) obj->getProperty ("knobCy");
+                spec.knobRadius = (float) obj->getProperty ("knobRadius");
+                spec.contentDiameter = (float) obj->getProperty ("contentDiameter");
+                spec.pivotXFrac = (float) obj->getProperty ("pivotXFrac");
+                spec.pivotYFrac = (float) obj->getProperty ("pivotYFrac");
+                spec.needleLengthFrac = (float) obj->getProperty ("needleLengthFrac");
+                result.sprites[name.toString()] = spec;
+            }
+        }
+    }
+
+    if (const auto* ticks = parsed.getProperty ("vuTicks", {}).getArray())
+        for (const auto& pair : *ticks)
+            if (const auto* entry = pair.getArray(); entry != nullptr && entry->size() == 2)
+                result.vuTicks.push_back ({ (float) (*entry)[0], (float) (*entry)[1] });
+
+    if (const auto* controls = parsed.getProperty ("controls", {}).getArray())
+    {
+        for (const auto& value : *controls)
+        {
+            if (const auto* obj = value.getDynamicObject())
+            {
+                ControlSpec spec;
+                spec.id = obj->getProperty ("id").toString();
+                spec.type = obj->getProperty ("type").toString();
+                spec.label = obj->getProperty ("label").toString();
+                spec.tap = obj->getProperty ("tap").toString();
+                spec.cx = (float) obj->getProperty ("cx");
+                spec.cy = (float) obj->getProperty ("cy");
+                spec.size = (float) obj->getProperty ("size");
+                spec.sweep = obj->hasProperty ("sweep") ? (float) obj->getProperty ("sweep") : 270.0f;
+                result.controls.push_back (std::move (spec));
+            }
+        }
+    }
+
+    if (const auto* labels = parsed.getProperty ("labels", {}).getArray())
+    {
+        for (const auto& value : *labels)
+        {
+            if (const auto* obj = value.getDynamicObject())
+            {
+                LabelSpec spec;
+                spec.text = obj->getProperty ("text").toString();
+                spec.style = obj->getProperty ("style").toString();
+                spec.cx = (float) obj->getProperty ("cx");
+                spec.cy = (float) obj->getProperty ("cy");
+                spec.h = (float) obj->getProperty ("h");
+                result.labels.push_back (std::move (spec));
+            }
+        }
+    }
+
+    if (const auto* rules = parsed.getProperty ("rules", {}).getArray())
+        for (const auto& value : *rules)
+            if (const auto* obj = value.getDynamicObject())
+                result.rules.push_back ({ (float) obj->getProperty ("x1"), (float) obj->getProperty ("y1"),
+                                          (float) obj->getProperty ("x2"), (float) obj->getProperty ("y2") });
+
+    return result;
+}
+
+juce::Image CryptaAudioProcessorEditor::imageForBinary (const juce::String& binaryName) const
+{
+    int dataSize = 0;
+    const auto* data = BinaryData::getNamedResource (binaryName.toRawUTF8(), dataSize);
+    jassert (data != nullptr);
+
+    if (data == nullptr)
+        return {};
+
+    return juce::ImageCache::getFromMemory (data, dataSize);
 }
 
 //==============================================================================
 CryptaAudioProcessorEditor::CryptaAudioProcessorEditor (CryptaAudioProcessor& processorToEdit)
-    : juce::AudioProcessorEditor (&processorToEdit),
+    : juce::AudioProcessorEditor (processorToEdit),
       audioProcessor (processorToEdit),
+      manifest (parseLayoutManifest()),
+      plateImage (imageForBinary (manifest.plateBinary)),
+      typography (BinaryData::EBGaramondRegular_ttf, BinaryData::EBGaramondRegular_ttfSize,
+                  BinaryData::EBGaramondSemiBold_ttf, BinaryData::EBGaramondSemiBold_ttfSize),
       presetBar (initLocalisationThenGetPresetManager (processorToEdit))
 {
-    // Propagates to every child, including the preset bar's stock buttons
-    // and any menus/dialogs they open.
-    setLookAndFeel (&lookAndFeel);
+    jassert (plateImage.isValid());
+    jassert (manifest.plateWidth1x > 0 && manifest.plateHeight1x > 0);
 
-    addAndMakeVisible (content);
+    designWidth = manifest.plateWidth1x;
+    designHeight = topStripHeight1x + manifest.plateHeight1x;
 
-    // FOCUS ORDER (WCAG 2.4.3): children are created and added in signal-
-    // flow/reading order - preset bar, then Input, Noise Gate, Crossover,
-    // Low Band, Drive Engine, Mid Band, High Band, Cabinet, EQ, Output
-    // (exactly the order processBlock() applies them in), left-to-right
-    // within each row. JUCE's default traverser follows this creation
-    // order; do not reorder. The three visual bands below regroup those
-    // panels for LAYOUT only - `bands` never reorders the children.
-    content.addAndMakeVisible (presetBar);
+    // FOCUS ORDER: preset bar and scale button first, then every control
+    // in manifest (signal-flow) order.
+    addAndMakeVisible (presetBar);
 
-    // --- Band 1: Input | Noise Gate | Crossover ---------------------------
-    auto& input = addPanel ("Input");
-    addKnob (input, ParamIDs::inputGain, "Input Gain");
-    addToggle (input, ParamIDs::bypass, "Bypass");
-    inputMeter = &addMeter (input, "Input peak level meter", "IN",
-                            basilica::gui::NeedleMeter::Scale::peakLevelDb);
+    scaleButton.setComponentID ("scaleButton");
+    scaleButton.onClick = [this] { cycleScale(); };
+    addAndMakeVisible (scaleButton);
 
-    auto& gate = addPanel ("Noise Gate");
-    addToggle (gate, ParamIDs::gateEnabled, "Gate");
-    addKnob (gate, ParamIDs::gateMode, "Mode");
-    addKnob (gate, ParamIDs::gateThreshold, "Threshold");
-    addKnob (gate, ParamIDs::gateRatio, "Ratio");
-    addKnob (gate, ParamIDs::gateAttack, "Attack");
-    addKnob (gate, ParamIDs::gateRelease, "Release");
+    buildControlsFromManifest();
 
-    addRow (gate);
-    addKnob (gate, ParamIDs::gateHysteresis, "Hysteresis");
-    addKnob (gate, ParamIDs::gateHold, "Hold");
-    addKnob (gate, ParamIDs::gateScHpf, "SC Highpass");
-    addKnob (gate, ParamIDs::gateRange, "Range");
+    applyScaleStep (readPersistedScaleStepIndex (audioProcessor.apvts.state));
 
-    gateMeter = &addMeter (gate, "Gate gain reduction meter", "GATE",
-                           basilica::gui::NeedleMeter::Scale::gainReductionDb);
-
-    auto& crossover = addPanel ("Crossover");
-    addKnob (crossover, ParamIDs::splitLowHz, "Split Low");
-    addKnob (crossover, ParamIDs::splitHighHz, "Split High");
-
-    bands.push_back ({ &input, &gate, &crossover });
-
-    // --- Band 2: Low Band | Drive Engine | Mid Band | High Band ------------
-    auto& low = addPanel ("Low Band");
-    addKnob (low, ParamIDs::lowCompDetector, "Detector");
-    addKnob (low, ParamIDs::lowCompThreshold, "Threshold");
-    addKnob (low, ParamIDs::lowCompRatio, "Ratio");
-    addKnob (low, ParamIDs::lowCompKnee, "Knee");
-    addKnob (low, ParamIDs::lowCompAttack, "Attack");
-    addKnob (low, ParamIDs::lowCompRelease, "Release");
-
-    addRow (low);
-    addToggle (low, ParamIDs::lowCompAutoRelease, "Auto Rel");
-    addToggle (low, ParamIDs::lowCompAutoMakeup, "Auto Mkup");
-    addKnob (low, ParamIDs::lowCompMakeup, "Makeup");
-    addKnob (low, ParamIDs::lowCompMix, "Mix");
-    addKnob (low, ParamIDs::lowLevel, "Low Level");
-
-    // v0.4.0 Graaawl (issue #36) gets its own row rather than being mixed into
-    // the compressor's control set: it is a separate mode on the low band, and
-    // it sits after the compressor in the signal path, so the reading order of
-    // this panel keeps matching the order processChunk() applies things in.
-    addRow (low);
-    addToggle (low, ParamIDs::lowGrowl, "Graaawl");
-    addKnob (low, ParamIDs::lowGrowlAmount, "Growl Amt");
-    addKnob (low, ParamIDs::lowGrowlTone, "Growl Tone");
-
-    lowCompMeter = &addMeter (low, "Low band compressor gain reduction meter", "COMP",
-                              basilica::gui::NeedleMeter::Scale::gainReductionDb);
-
-    auto& engine = addPanel ("Drive Engine");
-    addKnob (engine, ParamIDs::driveEngine, "Engine");
-
-    auto& mid = addPanel ("Mid Band");
-    addKnob (mid, ParamIDs::midDrive, "Mid Drive");
-    addKnob (mid, ParamIDs::midLevel, "Mid Level");
-
-    auto& high = addPanel ("High Band");
-    addKnob (high, ParamIDs::highTightHz, "Tight");
-    addKnob (high, ParamIDs::highVoicing, "Voicing");
-    addKnob (high, ParamIDs::highDrive, "High Drive");
-    addKnob (high, ParamIDs::highBias, "Bias");
-
-    addRow (high);
-    addKnob (high, ParamIDs::highTone, "Tone");
-    addKnob (high, ParamIDs::highBlend, "Blend");
-    addKnob (high, ParamIDs::highLevel, "High Level");
-
-    bands.push_back ({ &low, &engine, &mid, &high });
-
-    // --- Band 3: Cabinet | EQ | Output -------------------------------------
-    auto& cabinet = addPanel ("Cabinet");
-    addToggle (cabinet, ParamIDs::irEnabled, "Cab");
-    addKnob (cabinet, ParamIDs::irMix, "Cab Mix");
-
-    auto& eq = addPanel ("EQ");
-    addToggle (eq, ParamIDs::eqEnabled, "EQ");
-    addKnob (eq, ParamIDs::eqLowShelfFreq, "Low Freq");
-    addKnob (eq, ParamIDs::eqLowShelfGain, "Low Gain");
-    addKnob (eq, ParamIDs::eqPeak1Freq, "Peak 1 Freq");
-    addKnob (eq, ParamIDs::eqPeak1Gain, "Peak 1 Gain");
-    addKnob (eq, ParamIDs::eqPeak1Q, "Peak 1 Q");
-
-    addRow (eq);
-    addKnob (eq, ParamIDs::eqPeak2Freq, "Peak 2 Freq");
-    addKnob (eq, ParamIDs::eqPeak2Gain, "Peak 2 Gain");
-    addKnob (eq, ParamIDs::eqPeak2Q, "Peak 2 Q");
-    addKnob (eq, ParamIDs::eqHighShelfFreq, "High Freq");
-    addKnob (eq, ParamIDs::eqHighShelfGain, "High Gain");
-
-    auto& output = addPanel ("Output");
-    addToggle (output, ParamIDs::outputClip, "Clip");
-    addKnob (output, ParamIDs::clipCeiling, "Ceiling");
-    addKnob (output, ParamIDs::outputGain, "Output Gain");
-    outputMeter = &addMeter (output, "Output peak level meter", "OUT",
-                             basilica::gui::NeedleMeter::Scale::peakLevelDb);
-
-    bands.push_back ({ &cabinet, &eq, &output });
-
-    // --- Design size: computed from the control tables above ---------------
-    int contentWidth = 0;
-    int contentHeight = presetBarHeight;
-
-    for (size_t i = 0; i < bands.size(); ++i)
-    {
-        contentWidth = std::max (contentWidth, bandRequiredWidth (i));
-        contentHeight += bandGap + bandRequiredHeight (i);
-    }
-
-    designWidth = outerMargin * 2 + contentWidth;
-    designHeight = outerMargin * 2 + contentHeight;
-
-    // --- Resizing (issue #28) ---------------------------------------------
-    // Read the persisted scale BEFORE touching the resize limits: JUCE
-    // 8.0.14's setResizeLimits() ends with setBoundsConstrained (getBounds()),
-    // which - on a still-zero-sized editor - snaps the window to the minimum
-    // size and therefore fires resized(), which persists whatever scale that
-    // produced. Reading first makes the restore immune to that.
-    const auto persistedScale = readPersistedScale (audioProcessor.apvts.state);
-
-    // setResizeLimits() installs (and configures) the default constrainer;
-    // the fixed aspect ratio then makes every user drag a pure scale change,
-    // which is exactly the contract layoutContent() relies on.
-    // setResizable (true, true) attaches the ResizableCornerComponent
-    // (JUCE 8.0.14, AudioProcessorEditor::setResizable).
-    setResizeLimits ((int) std::lround (designWidth * minimumEditorScale),
-                     (int) std::lround (designHeight * minimumEditorScale),
-                     (int) std::lround (designWidth * maximumEditorScale),
-                     (int) std::lround (designHeight * maximumEditorScale));
-
-    if (auto* constrainer = getConstrainer())
-        constrainer->setFixedAspectRatio ((double) designWidth / (double) designHeight);
-
-    setResizable (true, true);
-
-    // Restore the scale the user last left this plugin instance at, then
-    // arm persistence: everything up to this point is construction noise,
-    // not a user decision.
-    setEditorScale (persistedScale);
-    scalePersistenceArmed = true;
-
-    // Meter polling: 30 Hz GUI-thread timer feeding the ballistic needles;
-    // cryp::MeterTaps' getters are relaxed-atomic loads, so this never
-    // touches (or blocks) the audio thread (issue #27).
     startTimerHz (meterRefreshHz);
 }
 
-CryptaAudioProcessorEditor::~CryptaAudioProcessorEditor()
+CryptaAudioProcessorEditor::~CryptaAudioProcessorEditor() = default;
+
+void CryptaAudioProcessorEditor::buildControlsFromManifest()
 {
-    stopTimer();
-    setLookAndFeel (nullptr);
-}
+    auto& apvts = audioProcessor.apvts;
 
-//==============================================================================
-CryptaAudioProcessorEditor::Panel& CryptaAudioProcessorEditor::addPanel (const juce::String& sectionTitle)
-{
-    auto panel = std::make_unique<Panel>();
-    panel->component = std::make_unique<basilica::gui::BusPanel> (sectionTitle);
-    panel->rows.emplace_back();
+    // Sprite images decode once and are shared by every control that uses
+    // the same sheet (juce::Image is COW-shared internally).
+    std::map<juce::String, juce::Image> spriteImages;
 
-    content.addAndMakeVisible (*panel->component);
+    for (const auto& [name, spec] : manifest.sprites)
+        spriteImages[name] = imageForBinary (spec.binary);
 
-    panels.push_back (std::move (panel));
-    return *panels.back();
-}
-
-void CryptaAudioProcessorEditor::addRow (Panel& panel)
-{
-    panel.rows.emplace_back();
-}
-
-CryptaAudioProcessorEditor::Knob& CryptaAudioProcessorEditor::addKnob (Panel& panel, const char* parameterId,
-                                                                       const juce::String& labelText)
-{
-    auto knob = std::make_unique<Knob>();
-
-    knob->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, knobSlotWidth - slotGap, textBoxHeight);
-    knob->slider.setTitle (labelText);
-    knob->slider.setName (labelText);
-    panel.component->addAndMakeVisible (knob->slider);
-
-    knob->label.setText (labelText, juce::dontSendNotification);
-    knob->label.setJustificationType (juce::Justification::centred);
-    knob->label.attachToComponent (&knob->slider, false); // above; auto-repositions with the slider
-    panel.component->addAndMakeVisible (knob->label);
-
-    // SliderAttachment MUST be constructed before the textFromValueFunction
-    // override below, not after: JUCE 8.0.14's SliderParameterAttachment
-    // constructor (juce_ParameterAttachments.cpp:128) itself assigns
-    // `slider.textFromValueFunction` as part of wiring the attachment -
-    // setting our own function BEFORE this point would be silently
-    // clobbered the moment the attachment is created.
-    knob->attachment = std::make_unique<SliderAttachment> (audioProcessor.apvts, parameterId, knob->slider);
-
-    if (auto* param = audioProcessor.apvts.getParameter (parameterId))
+    for (const auto& spec : manifest.controls)
     {
-        // A-02 pattern: unit-carrying parameters declare their unit via
-        // .withLabel() in ParameterLayout.cpp (dB/dBFS/ms/Hz/%/:1) - feed
-        // it into both the value box and the accessibility value string, so
-        // a screen reader hears "-60.00 dB" rather than a bare "-60.00".
-        //
-        // Choice parameters keep the parameter's own getText(), which
-        // returns the choice NAME. Continuous ones are formatted here rather
-        // than by getText(): the log-mapped frequency/time ranges are built
-        // from custom NormalisableRange conversion lambdas, and JUCE 8.0.14's
-        // AudioParameterFloat::getText() falls back to full float precision
-        // for those - "119.9999847" in a 74 px value box, truncated with an
-        // ellipsis. Decimals are chosen by magnitude instead.
-        const auto unit = param->getLabel();
-        const auto isChoice = dynamic_cast<const juce::AudioParameterChoice*> (param) != nullptr;
-
-        knob->slider.textFromValueFunction = [param, unit, isChoice] (double value)
+        if (spec.type == "knob" || spec.type == "selector")
         {
-            if (isChoice)
-                return param->getText (param->convertTo0to1 ((float) value), 0);
+            const auto& sprite = manifest.sprites.at (spec.type == "knob" ? "knob" : "selector");
+            const auto halfSweep = spec.sweep * 0.5f;
 
-            const auto magnitude = std::abs (value);
-            const auto decimals = magnitude >= 100.0 ? 0 : (magnitude >= 10.0 ? 1 : 2);
+            KnobControl control;
+            control.spec = spec;
+            control.slider = std::make_unique<basilica::gui::SpriteKnob> (
+                spriteImages.at (spec.type == "knob" ? "knob" : "selector"),
+                juce::Point<float> (sprite.knobCx, sprite.knobCy), sprite.knobRadius,
+                -halfSweep, halfSweep);
 
-            auto text = juce::String (value, decimals);
+            control.slider->setTitle (spec.label);
+            control.slider->setName (spec.id);
 
-            // "-0.00 dB" is a rounding artefact, not a reading.
-            if (text.startsWithChar ('-') && ! text.containsAnyOf ("123456789"))
-                text = text.substring (1);
+            if (auto* parameter = apvts.getParameter (spec.id))
+                control.slider->textFromValueFunction = [parameter] (double value)
+                {
+                    return parameter->getText (parameter->convertTo0to1 ((float) value), 0);
+                };
 
-            if (unit.isEmpty())
-                return text;
+            addAndMakeVisible (*control.slider);
+            control.attachment = std::make_unique<SliderAttachment> (apvts, spec.id, *control.slider);
+            knobs.push_back (std::move (control));
+        }
+        else if (spec.type == "toggle")
+        {
+            ToggleControl control;
+            control.spec = spec;
+            control.button = std::make_unique<basilica::gui::SpriteToggle> (spriteImages.at ("toggle"));
+            control.button->setTitle (spec.label);
+            control.button->setName (spec.id);
 
-            // Ratio labels read as "10.0:1", every other unit as "10.0 ms".
-            return unit.startsWithChar (':') ? text + unit : text + " " + unit;
-        };
+            addAndMakeVisible (*control.button);
+            control.attachment = std::make_unique<ButtonAttachment> (apvts, spec.id, *control.button);
+            toggles.push_back (std::move (control));
+        }
+        else if (spec.type == "vu")
+        {
+            const auto& sprite = manifest.sprites.at ("vu");
 
-        knob->slider.updateText();
+            MeterControl control;
+            control.spec = spec;
+            control.dial = std::make_unique<basilica::gui::NeedleDial> (
+                spriteImages.at ("vu"),
+                spec.tap == "inputPeak" ? juce::String ("Input peak level meter")
+                                        : juce::String ("Output peak level meter"),
+                sprite.pivotXFrac, sprite.pivotYFrac, sprite.needleLengthFrac, manifest.vuTicks);
+
+            addAndMakeVisible (*control.dial);
+            meters.push_back (std::move (control));
+        }
+        else
+        {
+            jassertfalse; // unknown control type in the manifest
+        }
     }
 
-    panel.rows.back().push_back (&knob->slider);
-    knobs.push_back (std::move (knob));
-    return *knobs.back();
-}
-
-CryptaAudioProcessorEditor::Toggle& CryptaAudioProcessorEditor::addToggle (Panel& panel, const char* parameterId,
-                                                                           const juce::String& labelText)
-{
-    auto toggle = std::make_unique<Toggle>();
-
-    // Real juce::ToggleButton on purpose: focusable and Space/Enter-
-    // operable by default, and its createAccessibilityHandler() reports
-    // AccessibilityRole::toggleButton (JUCE 8.0.14 juce_ToggleButton.cpp:71)
-    // so it lands in the VoiceOver rotor as a toggle, not a plain button.
-    toggle->button.setButtonText (labelText);
-    toggle->button.setTitle (labelText);
-    toggle->button.setName (labelText);
-    panel.component->addAndMakeVisible (toggle->button);
-
-    toggle->attachment = std::make_unique<ButtonAttachment> (audioProcessor.apvts, parameterId, toggle->button);
-
-    panel.rows.back().push_back (&toggle->button);
-    toggles.push_back (std::move (toggle));
-    return *toggles.back();
-}
-
-basilica::gui::NeedleMeter& CryptaAudioProcessorEditor::addMeter (Panel& panel, const juce::String& accessibleTitle,
-                                                                   const juce::String& faceLegend,
-                                                                   basilica::gui::NeedleMeter::Scale scale)
-{
-    auto meter = std::make_unique<basilica::gui::NeedleMeter> (accessibleTitle, faceLegend, scale);
-    panel.component->addAndMakeVisible (*meter);
-    panel.meter = meter.get();
-
-    meters.push_back (std::move (meter));
-    return *meters.back();
+    // Seed each needle's initial pose from the live tap so the editor
+    // opens with honest readings instead of a ramp from the floor.
+    updateMetersFromProcessor (1.0e6f);
 }
 
 //==============================================================================
-void CryptaAudioProcessorEditor::timerCallback()
+void CryptaAudioProcessorEditor::applyScaleStep (int newStepIndex)
 {
-    updateMetersFromProcessor (1.0f / (float) meterRefreshHz);
+    scaleStepIndex = juce::jlimit (0, (int) scaleSteps.size() - 1, newStepIndex);
+
+    const auto percentText = juce::String ((int) std::lround (scaleSteps[(size_t) scaleStepIndex] * 100.0f)) + "%";
+    scaleButton.setButtonText (percentText);
+    scaleButton.setTitle ("Window scale, " + percentText);
+
+    audioProcessor.apvts.state.setProperty (getScaleStatePropertyId(),
+                                            (double) scaleSteps[(size_t) scaleStepIndex], nullptr);
+
+    const auto scale = scaleSteps[(size_t) scaleStepIndex];
+    setSize ((int) std::lround ((float) designWidth * scale),
+             (int) std::lround ((float) designHeight * scale));
 }
 
+void CryptaAudioProcessorEditor::cycleScale()
+{
+    applyScaleStep ((scaleStepIndex + 1) % (int) scaleSteps.size());
+}
+
+//==============================================================================
+void CryptaAudioProcessorEditor::resized()
+{
+    const auto scale = getEditorScale();
+    const auto s = [scale] (float value1x) { return (int) std::lround (value1x * scale); };
+
+    auto topStrip = getLocalBounds().removeFromTop (s ((float) topStripHeight1x));
+    scaleButton.setBounds (topStrip.removeFromRight (s (64.0f)).reduced (0, s (4.0f)));
+    presetBar.setBounds (topStrip.reduced (0, s (2.0f)));
+
+    const auto plateOriginY = (float) s ((float) topStripHeight1x);
+
+    const auto place = [&] (const ControlSpec& spec, float frameW, float frameH,
+                            float anchorX, float anchorY, float drawScale1x)
+    {
+        // drawScale1x: sprite px -> design px. anchorX/anchorY: the point
+        // within the sprite frame that must land on (cx, cy).
+        const auto totalScale = drawScale1x * scale;
+        const auto x = spec.cx * scale - anchorX * totalScale;
+        const auto y = spec.cy * scale + plateOriginY - anchorY * totalScale;
+
+        return juce::Rectangle<int> ((int) std::lround (x), (int) std::lround (y),
+                                     (int) std::lround (frameW * totalScale),
+                                     (int) std::lround (frameH * totalScale));
+    };
+
+    for (auto& control : knobs)
+    {
+        const auto& sprite = manifest.sprites.at (control.spec.type == "knob" ? "knob" : "selector");
+        const auto drawScale = control.spec.size / (2.0f * sprite.knobRadius);
+        control.slider->setBounds (place (control.spec, sprite.width, sprite.height,
+                                          sprite.knobCx, sprite.knobCy, drawScale));
+    }
+
+    for (auto& control : toggles)
+    {
+        const auto& sprite = manifest.sprites.at ("toggle");
+        const auto drawScale = control.spec.size / sprite.height;
+        control.button->setBounds (place (control.spec, sprite.width, sprite.height,
+                                          sprite.width * 0.5f, sprite.height * 0.5f, drawScale));
+    }
+
+    for (auto& control : meters)
+    {
+        const auto& sprite = manifest.sprites.at ("vu");
+        const auto drawScale = control.spec.size / sprite.contentDiameter;
+        control.dial->setBounds (place (control.spec, sprite.width, sprite.height,
+                                        sprite.width * 0.5f, sprite.height * 0.5f, drawScale));
+    }
+}
+
+//==============================================================================
+void CryptaAudioProcessorEditor::paint (juce::Graphics& g)
+{
+    g.fillAll (juce::Colour (0xff0b0a09));
+
+    const auto scale = getEditorScale();
+    const auto plateOriginY = std::lround ((float) topStripHeight1x * scale);
+
+    g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+    g.drawImage (plateImage,
+                 juce::Rectangle<float> (0.0f, (float) plateOriginY,
+                                         (float) manifest.plateWidth1x * scale,
+                                         (float) manifest.plateHeight1x * scale));
+
+    drawPlateTypography (g, scale, (float) plateOriginY);
+}
+
+void CryptaAudioProcessorEditor::drawPlateTypography (juce::Graphics& g, float scale, float plateOriginY) const
+{
+    using basilica::gui::EngravedTextStyle;
+
+    const auto boxAt = [&] (float cx, float cy, float w1x, float h1x)
+    {
+        return juce::Rectangle<float> (cx * scale - w1x * scale * 0.5f,
+                                       cy * scale + plateOriginY - h1x * scale * 0.5f,
+                                       w1x * scale, h1x * scale);
+    };
+
+    for (const auto& label : manifest.labels)
+    {
+        EngravedTextStyle style { juce::Colour (sectionInk), juce::Colour (letterShadow), label.h, 0.24f, true };
+
+        if (label.style == "wordmark")
+            style = { juce::Colour (wordmarkInk), juce::Colour (letterShadow), label.h, 0.32f, true };
+        else if (label.style == "caption")
+            style = { juce::Colour (captionInk), juce::Colour (letterShadow), label.h, 0.46f, false };
+
+        typography.drawEngraved (g, label.text, boxAt (label.cx, label.cy, 420.0f, label.h + 8.0f), scale, style);
+    }
+
+    const EngravedTextStyle controlStyle { juce::Colour (controlInk), juce::Colour (letterShadow),
+                                           controlLabelHeight1x, 0.16f, false };
+
+    for (const auto& control : manifest.controls)
+    {
+        if (control.label.isEmpty())
+            continue;
+
+        const auto labelGap1x = control.type == "vu" ? 16.0f : 13.0f;
+        const auto labelCy = control.cy + control.size * 0.5f + labelGap1x;
+        typography.drawEngraved (g, control.label, boxAt (control.cx, labelCy, 110.0f, 14.0f), scale, controlStyle);
+    }
+
+    // Engraved section rules: incision line + lit lip below (the plate's
+    // own pinstripe language - separators only, never decoration without
+    // grouping meaning).
+    for (const auto& rule : manifest.rules)
+    {
+        const auto x1 = rule.x1 * scale;
+        const auto y1 = rule.y1 * scale + plateOriginY;
+        const auto x2 = rule.x2 * scale;
+        const auto y2 = rule.y2 * scale + plateOriginY;
+        const auto lip = juce::jmax (1.0f, scale);
+
+        g.setColour (juce::Colour (ruleLip));
+
+        if (std::abs (x2 - x1) < std::abs (y2 - y1))
+            g.drawLine (x1 + lip, y1, x2 + lip, y2, juce::jmax (1.0f, scale * 0.8f));
+        else
+            g.drawLine (x1, y1 + lip, x2, y2 + lip, juce::jmax (1.0f, scale * 0.8f));
+
+        g.setColour (juce::Colour (ruleInk));
+        g.drawLine (x1, y1, x2, y2, juce::jmax (1.0f, scale * 0.8f));
+    }
+}
+
+//==============================================================================
 void CryptaAudioProcessorEditor::updateMetersFromProcessor (float dtSeconds)
 {
     const auto& taps = audioProcessor.getMeterTaps();
 
-    const auto peakDb = [] (const std::atomic<float>& left, const std::atomic<float>& right)
-    {
-        // Stereo peaks: the louder side is what a clip-watching meter shows.
-        return juce::Decibels::gainToDecibels (juce::jmax (left.load (std::memory_order_relaxed),
-                                                            right.load (std::memory_order_relaxed)),
-                                               peakMeterFloorDb);
-    };
-
-    if (inputMeter != nullptr)
-        inputMeter->setTargetDb (peakDb (taps.inputPeakLeft, taps.inputPeakRight));
-
-    if (outputMeter != nullptr)
-        outputMeter->setTargetDb (peakDb (taps.outputPeakLeft, taps.outputPeakRight));
-
-    // Already positive dB of gain reduction, straight from the engine's
-    // per-block metering (src/dsp/MeterTaps.h).
-    if (gateMeter != nullptr)
-        gateMeter->setTargetDb (taps.gateGainReductionDb.load (std::memory_order_relaxed));
-
-    if (lowCompMeter != nullptr)
-        lowCompMeter->setTargetDb (taps.lowCompGainReductionDb.load (std::memory_order_relaxed));
-
     for (auto& meter : meters)
-        meter->tick (dtSeconds);
-}
-
-//==============================================================================
-int CryptaAudioProcessorEditor::slotWidthFor (const juce::Component& control) noexcept
-{
-    return dynamic_cast<const juce::Slider*> (&control) != nullptr ? knobSlotWidth : toggleSlotWidth;
-}
-
-int CryptaAudioProcessorEditor::rowWidth (const std::vector<juce::Component*>& row) noexcept
-{
-    int width = 0;
-
-    for (const auto* control : row)
-        width += slotWidthFor (*control);
-
-    return width;
-}
-
-int CryptaAudioProcessorEditor::panelRequiredWidth (const Panel& panel) noexcept
-{
-    int widest = 0;
-
-    for (const auto& row : panel.rows)
-        widest = std::max (widest, rowWidth (row));
-
-    return panelPadding * 2 + widest + (panel.meter != nullptr ? meterBayWidth : 0);
-}
-
-int CryptaAudioProcessorEditor::panelRequiredHeight (const Panel& panel) noexcept
-{
-    const auto numRows = (int) panel.rows.size();
-    return basilica::gui::BusPanel::headerHeight
-         + numRows * rowHeight + (numRows - 1) * rowGap
-         + panelBottomPadding;
-}
-
-int CryptaAudioProcessorEditor::bandRequiredWidth (size_t bandIndex) const noexcept
-{
-    const auto& band = bands[bandIndex];
-    int width = ((int) band.size() - 1) * bandGap;
-
-    for (const auto* panel : band)
-        width += panelRequiredWidth (*panel);
-
-    return width;
-}
-
-int CryptaAudioProcessorEditor::bandRequiredHeight (size_t bandIndex) const noexcept
-{
-    int height = 0;
-
-    for (const auto* panel : bands[bandIndex])
-        height = std::max (height, panelRequiredHeight (*panel));
-
-    return height;
-}
-
-//==============================================================================
-double CryptaAudioProcessorEditor::getEditorScale() const noexcept
-{
-    return designWidth > 0 ? (double) getWidth() / (double) designWidth : defaultEditorScale;
-}
-
-void CryptaAudioProcessorEditor::setEditorScale (double newScale)
-{
-    const auto clamped = juce::jlimit (minimumEditorScale, maximumEditorScale,
-                                       std::isfinite (newScale) ? newScale : defaultEditorScale);
-
-    // Through the constrainer, so the aspect ratio and the size limits set
-    // up in the constructor apply to a programmatic scale change exactly as
-    // they do to a corner drag (JUCE 8.0.14, AudioProcessorEditor::
-    // setBoundsConstrained).
-    setBoundsConstrained (getBounds().withSize ((int) std::lround (designWidth * clamped),
-                                                (int) std::lround (designHeight * clamped)));
-}
-
-void CryptaAudioProcessorEditor::persistScale (double scale)
-{
-    // Issue #28: the scale is a root-level property on the APVTS state
-    // tree, which CryptaAudioProcessor::getStateInformation() serialises
-    // whole - see getScaleStatePropertyId().
-    //
-    // Written only when it actually CHANGES, and never written at all while
-    // the editor is simply sitting at the default size on a session that
-    // has no stored scale: merely opening a plug-in window must not mutate
-    // the session's saved state (hosts treat that as an edit, and a
-    // validator comparing state across an editor open/close cycle would
-    // rightly flag it).
-    if (! scalePersistenceArmed)
-        return;
-
-    auto& state = audioProcessor.apvts.state;
-
-    if (! state.hasProperty (getScaleStatePropertyId())
-        && juce::approximatelyEqual (scale, defaultEditorScale))
-        return;
-
-    if (juce::approximatelyEqual (readPersistedScale (state), scale))
-        return;
-
-    state.setProperty (getScaleStatePropertyId(), scale, nullptr);
-}
-
-void CryptaAudioProcessorEditor::paint (juce::Graphics& g)
-{
-    g.fillAll (basilica::gui::BasilicaLookAndFeel::getEditorBackgroundColour());
-}
-
-void CryptaAudioProcessorEditor::resized()
-{
-    if (designWidth <= 0 || designHeight <= 0 || getWidth() <= 0 || getHeight() <= 0)
-        return;
-
-    // The content is always laid out at the design size; the window size is
-    // expressed purely as a uniform scale transform on it.
-    content.setBounds (0, 0, designWidth, designHeight);
-    content.setTransform (juce::AffineTransform::scale ((float) getEditorScale()));
-
-    layoutContent();
-
-    persistScale (getEditorScale());
-}
-
-void CryptaAudioProcessorEditor::layoutContent()
-{
-    auto bounds = content.getLocalBounds().reduced (outerMargin);
-
-    presetBar.setBounds (bounds.removeFromTop (presetBarHeight));
-
-    const auto layoutPanel = [] (Panel& panel, juce::Rectangle<int> area)
     {
-        panel.component->setBounds (area);
+        float db = peakMeterFloorDb;
 
-        auto panelContent = panel.component->getLocalBounds().reduced (panelPadding, 0);
-        panelContent.removeFromTop (basilica::gui::BusPanel::headerHeight);
+        if (meter.spec.tap == "inputPeak")
+            db = linearPeakToDb (juce::jmax (taps.inputPeakLeft.load (std::memory_order_relaxed),
+                                             taps.inputPeakRight.load (std::memory_order_relaxed)));
+        else if (meter.spec.tap == "outputPeak")
+            db = linearPeakToDb (juce::jmax (taps.outputPeakLeft.load (std::memory_order_relaxed),
+                                             taps.outputPeakRight.load (std::memory_order_relaxed)));
 
-        if (panel.meter != nullptr)
-        {
-            auto bay = panelContent.removeFromRight (meterBayWidth);
-            panel.meter->setBounds (juce::Rectangle<int> (meterWidth,
-                                                          juce::jmin (meterHeight, bay.getHeight()))
-                                        .withCentre (bay.getCentre()));
-        }
-
-        for (auto& row : panel.rows)
-        {
-            auto rowArea = panelContent.removeFromTop (rowHeight);
-            rowArea.removeFromTop (labelHeight); // attached labels position themselves here
-
-            for (auto* control : row)
-            {
-                auto slot = rowArea.removeFromLeft (slotWidthFor (*control)).withTrimmedRight (slotGap);
-
-                if (dynamic_cast<juce::Slider*> (control) != nullptr)
-                    control->setBounds (slot.withHeight (knobSize + textBoxHeight));
-                else
-                    control->setBounds (slot.withSizeKeepingCentre (slot.getWidth(), toggleHeight)
-                                            .withY (rowArea.getY() + (knobSize - toggleHeight) / 2));
-            }
-
-            panelContent.removeFromTop (rowGap);
-        }
-    };
-
-    for (size_t bandIndex = 0; bandIndex < bands.size(); ++bandIndex)
-    {
-        bounds.removeFromTop (bandGap);
-        auto bandArea = bounds.removeFromTop (bandRequiredHeight (bandIndex));
-
-        const auto& band = bands[bandIndex];
-
-        for (size_t panelIndex = 0; panelIndex < band.size(); ++panelIndex)
-        {
-            // The last panel of each band absorbs the band's leftover width,
-            // so every band spans the full editor width instead of leaving a
-            // ragged right edge.
-            const auto isLast = panelIndex + 1 == band.size();
-            auto panelArea = isLast ? bandArea
-                                    : bandArea.removeFromLeft (panelRequiredWidth (*band[panelIndex]));
-
-            layoutPanel (*band[panelIndex], panelArea);
-
-            if (! isLast)
-                bandArea.removeFromLeft (bandGap);
-        }
+        meter.dial->setTargetDb (db);
+        meter.dial->tick (dtSeconds);
     }
+}
+
+void CryptaAudioProcessorEditor::timerCallback()
+{
+    updateMetersFromProcessor (1.0f / (float) meterRefreshHz);
 }

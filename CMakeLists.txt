@@ -96,6 +96,17 @@ juce_add_binary_data(CryptaBinaryData SOURCES
     # published under is committed at resources/irs/CC0-1.0.txt. Registered in
     # CryptaAudioProcessor::getFactoryIRAssetTable(), guarded by the licence bar
     # in src/dsp/FactoryIRs.cpp and re-measured by tests/FactoryIRTests.cpp.
+    # Wave-3 photoreal "composited plate" GUI (see src/PluginEditor.h): the
+    # approved empty master plate, the suite control sprites (feathered-alpha
+    # crops from approved master renders - provenance in the gui-pipeline
+    # scaffold's sprite-library/provenance.md), and the layout manifest that
+    # maps every parameter id to a sprite type + plate position.
+    resources/gui/plate_crypta.png
+    resources/gui/sprite_knob.png
+    resources/gui/sprite_selector.png
+    resources/gui/sprite_toggle_up.png
+    resources/gui/sprite_vu_dial.png
+    resources/gui/layout-manifest.json
     resources/irs/modelled_8x10_cone.wav
     resources/irs/modelled_8x10_edge.wav
     resources/irs/modelled_1x15_vintage.wav

@@ -2,62 +2,61 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <array>
+#include <map>
 #include <memory>
 #include <vector>
 
-#include "gui/BasilicaLookAndFeel.h"
-#include "gui/BusPanel.h"
-#include "gui/NeedleMeter.h"
-#include "gui/PointerKnob.h"
+#include "gui/NeedleDial.h"
+#include "gui/PlateTypography.h"
+#include "gui/SpriteKnob.h"
+#include "gui/SpriteToggle.h"
 #include "presets/PresetBar.h"
 
 class CryptaAudioProcessor;
 
-// M3/M6 custom vector editor (issues #45 / #25), accessible parameter
-// surface (issues #26 / #46), metering UI (issue #27) and resizable editor
-// with persisted scale (issue #28). Replaces the v0.1-v0.3 preset bar +
-// GenericAudioProcessorEditor stack.
+// Wave-3 photoreal "composited plate" editor (suite rollout 2026-08,
+// DECISIONS.md in the gui-pipeline scaffold): the approved EMPTY master
+// plate render (resources/gui/plate_crypta.png) is the baseline image, and
+// every control is composited on top of it from the suite's control-sprite
+// library at positions declared in resources/gui/layout-manifest.json -
+// param id -> sprite type + centre + size, derived from the plugin's
+// control inventory. This replaces the v0.4-era fully vector-drawn editor
+// (owner decision 2026-07-15: vector GUIs rejected, photoreal mandatory).
 //
-// Everything is drawn at runtime by BasilicaLookAndFeel / the src/gui
-// components - no photoreal PNG assets exist in this plugin (unlike the
-// filmstrip/faceplate siblings): pointer knobs with engraved scale rings,
-// lamp toggles, and four vector needle meters (input peak, gate gain
-// reduction, low-band compressor gain reduction, output peak - exactly the
-// readings cryp::MeterTaps exposes), grouped into one BusPanel per stage in
-// signal-flow order: Input / Noise Gate / Crossover / Low Band / Drive
-// Engine / Mid Band / High Band / Cabinet / EQ / Output.
+// Composition layers, bottom to top:
+//   1. the empty plate (paint()) - gold rim, corner filigree, vents,
+//      centre ornament, screws; all baked, zero baked controls.
+//   2. sprite controls (child components): SpriteKnob (static sprite +
+//      rotating feathered inner disc), SpriteToggle (up sprite; mirrored
+//      down state - a documented sprite-library gap workaround), and the
+//      family VU pair as NeedleDial (needle-free face sprite + live vector
+//      needle from the processor's lock-free MeterTaps).
+//   3. typography (paint(), src/gui/PlateTypography.h): wordmark, section
+//      lettering, per-control labels and thin engraved section rules, set
+//      live in EB Garamond so they stay tack sharp at every scale step -
+//      text baked into AI master renders never survived the render loop
+//      legibly (suite typography pass, owner decision 2026-07-26).
 //
-// FOCUS ORDER CONTRACT (WCAG 2.4.3, suite-wide convention): JUCE's default
-// traverser walks children in z-order, which equals CREATION order - the
-// constructor therefore creates every control in signal-flow/reading order
-// (preset bar first, then panel by panel, left-to-right within each row),
-// and nothing may reorder children afterwards. Each BusPanel is an
-// accessibility focus container (NOT a keyboard focus container - see
-// BusPanel.h), so screen readers hear "Low Band, Ratio" while Tab still
-// walks the whole editor.
+// CONTROL SURFACE SCOPE: exactly the rendered inventory of
+// rollout-2026-07/crypta/control-inventory.md - 33 knobs + 1 selector
+// (highVoicing) + 5 toggles + 2 VU meters. Parameters added after that
+// inventory (gate v0.3 extensions, low-band detector/knee/auto, Graaawl,
+// driveEngine, highBias, clipCeiling) are automation/host-only for this
+// GUI generation, per the same suite precedent that governs triptych's
+// v0.5.0 and lancet's v0.4.0 waves. tests/gui/LayoutManifestTests.cpp
+// pins those counts.
 //
-// Controls are built data-driven from ID/label tables (see the .cpp) - all
-// float AND choice parameters are PointerKnobs (choice knobs snap to their
-// integer detents and announce the choice NAME), bool parameters are real
-// juce::ToggleButtons (focusable and Space/Enter-operable out of the box,
-// reported as toggle buttons by AT).
+// FOCUS ORDER CONTRACT (WCAG 2.4.3): children are created in manifest
+// order, which is signal-flow/reading order; JUCE's default traverser
+// follows creation order - do not reorder.
 //
-// RESIZING (issue #28): the whole surface is laid out once at a fixed design
-// size inside `content`, and resizing only changes the uniform scale
-// transform applied to that child - so no layout arithmetic can break at an
-// odd window size. JUCE 8.0.14's AudioProcessorEditor::setScaleFactor() is
-// explicitly the HOST's channel ("Can be called by a host to tell the editor
-// that it should use a non-unity GUI scale", juce_AudioProcessorEditor.h:129)
-// and sets a transform on the editor itself, so it is deliberately NOT
-// reused for the user's own scale: the two compose (host transform on the
-// editor, user scale on `content`) instead of fighting over one slot. The
-// user-facing mechanism is the documented one for plug-in editors:
-// setResizable (true, true) - which attaches a ResizableCornerComponent -
-// plus setResizeLimits() and a fixed aspect ratio on the resulting
-// constrainer (juce_AudioProcessorEditor.cpp, ComponentBoundsConstrainer::
-// setFixedAspectRatio).
+// RESIZING: stepped window scaling (75/100/150/200%) like the rest of the
+// photoreal family - no free resize with prerendered assets (UA
+// convention; the suite skill file). The chosen scale persists in plugin
+// state under the same root property the v0.4 editor used.
 class CryptaAudioProcessorEditor final : public juce::AudioProcessorEditor,
-                                          private juce::Timer
+                                         private juce::Timer
 {
 public:
     explicit CryptaAudioProcessorEditor (CryptaAudioProcessor& processorToEdit);
@@ -66,142 +65,126 @@ public:
     void paint (juce::Graphics& g) override;
     void resized() override;
 
-    //==============================================================================
-    // Issue #28: resizable editor with the chosen scale persisted in plugin
-    // state.
+    //==========================================================================
+    // Layout manifest access - tests parse the SAME embedded JSON the
+    // editor builds itself from (tests/gui/LayoutManifestTests.cpp).
 
-    // The unscaled design size every child is laid out at, computed in the
-    // constructor from the layout constants + control tables in the .cpp
-    // (never a hand-copied literal) and asserted against the real component
-    // tree in tests/gui/EditorLayoutTests.cpp.
+    struct SpriteSpec
+    {
+        juce::String binary;
+        float width = 0, height = 0;
+        float knobCx = 0, knobCy = 0, knobRadius = 0;
+        float contentDiameter = 0;
+        float pivotXFrac = 0, pivotYFrac = 0, needleLengthFrac = 0;
+    };
+
+    struct ControlSpec
+    {
+        juce::String id, type, label, tap;
+        float cx = 0, cy = 0, size = 0, sweep = 270;
+    };
+
+    struct LabelSpec
+    {
+        juce::String text, style;
+        float cx = 0, cy = 0, h = 0;
+    };
+
+    struct RuleSpec
+    {
+        float x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+    };
+
+    struct Manifest
+    {
+        juce::String plateBinary;
+        int plateWidth1x = 0, plateHeight1x = 0;
+        std::map<juce::String, SpriteSpec> sprites;
+        std::vector<basilica::gui::NeedleDial::Tick> vuTicks;
+        std::vector<ControlSpec> controls;
+        std::vector<LabelSpec> labels;
+        std::vector<RuleSpec> rules;
+    };
+
+    static Manifest parseLayoutManifest();
+
+    //==========================================================================
+    // Stepped window scale, persisted as a root property of the APVTS
+    // state tree (same storage slot as the previous editor generation, so
+    // stored sessions keep round-tripping; arbitrary stored values snap to
+    // the nearest step).
+
+    static constexpr std::array<float, 4> scaleSteps { 0.75f, 1.0f, 1.5f, 2.0f };
+    static constexpr int defaultScaleStepIndex = 1; // 100%
+
+    static const juce::Identifier& getScaleStatePropertyId() noexcept;
+    static int readPersistedScaleStepIndex (const juce::ValueTree& state) noexcept;
+
+    void applyScaleStep (int newStepIndex);
+    int getScaleStepIndex() const noexcept { return scaleStepIndex; }
+    float getEditorScale() const noexcept { return scaleSteps[(size_t) scaleStepIndex]; }
+
     int getDesignWidth() const noexcept { return designWidth; }
     int getDesignHeight() const noexcept { return designHeight; }
 
-    static constexpr double minimumEditorScale = 0.6;
-    static constexpr double maximumEditorScale = 1.8;
-    static constexpr double defaultEditorScale = 1.0;
+    //==========================================================================
+    // Metering seam (headless tests drive the pump directly - no message
+    // loop, no real timer ticks).
 
-    // The property name the scale is stored under, as a child property of
-    // the APVTS root state tree. Living on the APVTS state (rather than in a
-    // processor member) is what makes it round-trip through the EXISTING
-    // CryptaAudioProcessor::get/setStateInformation() pair for free: the
-    // tree is serialised whole, and JUCE 8.0.14's APVTS only reacts to
-    // property changes on its PARAM child trees (juce_AudioProcessor
-    // ValueTreeState.cpp:442), so a root-level property is inert for it.
-    static const juce::Identifier& getScaleStatePropertyId() noexcept;
-
-    // Reads the persisted scale out of an APVTS state tree, clamped to the
-    // supported range; falls back to defaultEditorScale when absent or
-    // unparseable. Static so a test (or a future host-side query) can ask
-    // without constructing an editor.
-    static double readPersistedScale (const juce::ValueTree& state) noexcept;
-
-    // Applies a new scale: resizes the editor (through the constrainer, so
-    // the aspect ratio and the size limits are honoured) and persists it.
-    void setEditorScale (double newScale);
-
-    double getEditorScale() const noexcept;
-
-    //==============================================================================
-    // Issue #27 (metering UI) verification seam. The 30 Hz GUI-thread timer
-    // is the only thing that reads cryp::MeterTaps; exposing the pump and
-    // the timer's state lets a headless test binary - which has no running
-    // message loop to fire real timer callbacks - assert the full path
-    // (atomics -> ballistics -> needle) deterministically.
     void updateMetersFromProcessor (float dtSeconds);
 
     bool isMeteringTimerRunning() const noexcept { return isTimerRunning(); }
     int getMeteringTimerIntervalMs() const noexcept { return getTimerInterval(); }
 
     static constexpr int meterRefreshHz = 30;
+    static constexpr int topStripHeight1x = 34;
 
 private:
+    void timerCallback() override;
+    void cycleScale();
+    void buildControlsFromManifest();
+    juce::Image imageForBinary (const juce::String& binaryName) const;
+    void drawPlateTypography (juce::Graphics& g, float scale, float plateOriginY) const;
+
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
-    struct Knob
+    struct KnobControl
     {
-        basilica::gui::PointerKnob slider;
-        juce::Label label;
+        ControlSpec spec;
+        std::unique_ptr<basilica::gui::SpriteKnob> slider;
         std::unique_ptr<SliderAttachment> attachment;
     };
 
-    struct Toggle
+    struct ToggleControl
     {
-        juce::ToggleButton button;
+        ControlSpec spec;
+        std::unique_ptr<basilica::gui::SpriteToggle> button;
         std::unique_ptr<ButtonAttachment> attachment;
     };
 
-    // One stage faceplate: the BusPanel component plus its control rows
-    // (each row a left-to-right list of the controls laid out in it) and
-    // an optional needle meter in the panel's right bay.
-    struct Panel
+    struct MeterControl
     {
-        std::unique_ptr<basilica::gui::BusPanel> component;
-        std::vector<std::vector<juce::Component*>> rows;
-        basilica::gui::NeedleMeter* meter = nullptr; // owned via `meters`
+        ControlSpec spec;
+        std::unique_ptr<basilica::gui::NeedleDial> dial;
     };
-
-    Panel& addPanel (const juce::String& sectionTitle);
-    void addRow (Panel& panel);
-    Knob& addKnob (Panel& panel, const char* parameterId, const juce::String& labelText);
-    Toggle& addToggle (Panel& panel, const char* parameterId, const juce::String& labelText);
-    basilica::gui::NeedleMeter& addMeter (Panel& panel, const juce::String& accessibleTitle,
-                                          const juce::String& faceLegend,
-                                          basilica::gui::NeedleMeter::Scale scale);
-
-    void timerCallback() override;
-
-    void layoutContent();
-    void persistScale (double scale);
-
-    static int slotWidthFor (const juce::Component& control) noexcept;
-    static int rowWidth (const std::vector<juce::Component*>& row) noexcept;
-    static int panelRequiredWidth (const Panel& panel) noexcept;
-    static int panelRequiredHeight (const Panel& panel) noexcept;
-    int bandRequiredWidth (size_t bandIndex) const noexcept;
-    int bandRequiredHeight (size_t bandIndex) const noexcept;
 
     CryptaAudioProcessor& audioProcessor;
 
-    // Must be constructed before any child that paints with it and
-    // installed on `this` so it propagates to every child (including the
-    // preset bar's stock buttons/menus/dialogs).
-    basilica::gui::BasilicaLookAndFeel lookAndFeel;
+    Manifest manifest;
+    juce::Image plateImage;
+    basilica::gui::PlateTypography typography;
 
-    // Everything visible lives inside this child, laid out at the fixed
-    // design size; the editor only ever scales it (see the class docs).
-    juce::Component content;
-
-    // M2 preset system - constructed after the localisation frame is
-    // installed (see the constructor) so its TRANS()'d strings pick up the
-    // right language from the very first paint.
     basilica::presets::PresetBar presetBar;
+    juce::TextButton scaleButton;
+    int scaleStepIndex = defaultScaleStepIndex;
 
-    std::vector<std::unique_ptr<Knob>> knobs;
-    std::vector<std::unique_ptr<Toggle>> toggles;
-    std::vector<std::unique_ptr<basilica::gui::NeedleMeter>> meters;
-    std::vector<std::unique_ptr<Panel>> panels;
-
-    // Signal-flow bands: each band is a horizontal row of panels, stacked
-    // top to bottom in the order they are appended.
-    std::vector<std::vector<Panel*>> bands;
-
-    // Meters owned by `meters`, kept as raw pointers for the timer.
-    basilica::gui::NeedleMeter* inputMeter = nullptr;
-    basilica::gui::NeedleMeter* gateMeter = nullptr;
-    basilica::gui::NeedleMeter* lowCompMeter = nullptr;
-    basilica::gui::NeedleMeter* outputMeter = nullptr;
+    std::vector<KnobControl> knobs;
+    std::vector<ToggleControl> toggles;
+    std::vector<MeterControl> meters;
 
     int designWidth = 0;
     int designHeight = 0;
-
-    // Persistence is armed only once the constructor has finished restoring
-    // the stored scale. Without this, the intermediate sizes JUCE 8.0.14's
-    // setResizeLimits() produces on a still-zero-sized editor (it ends with
-    // setBoundsConstrained (getBounds()), which snaps to the minimum size
-    // and fires resized()) would be written to the session state.
-    bool scalePersistenceArmed = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CryptaAudioProcessorEditor)
 };
