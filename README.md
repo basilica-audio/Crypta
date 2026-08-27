@@ -118,9 +118,17 @@ is what is committed as [`docs/gui-preview.png`](docs/gui-preview.png). See
 
 ## Installation
 
-Download the archive for your platform from the [Releases](../../releases) page and copy the bundles into the standard plugin locations. Each archive ships with a `.sha256` file, so a download can be verified with `shasum -a 256 -c <asset>.sha256`.
+Download from the [Releases](../../releases) page. Every asset ships with a `.sha256` file, so a download can be verified with `shasum -a 256 -c <asset>.sha256`.
 
-**macOS**
+**macOS — installer (recommended)**
+
+Open `crypta-vX.Y.Z-macos.pkg` and pick which formats to install. It puts the AU in `/Library/Audio/Plug-Ins/Components/`, the VST3 in `/Library/Audio/Plug-Ins/VST3/` and the standalone app in `/Applications/` — system-wide, for every user on the machine.
+
+While the asset is still named `crypta-vX.Y.Z-macos-unsigned.pkg`, macOS will refuse to open it on a double-click; **right-click the file and choose Open**, then confirm. This applies to the installer only: the plugins it installs are signed with a Developer ID Application certificate, notarized and stapled, and load in a DAW without any warning. See [issue #31](../../issues/31).
+
+**macOS — manual**
+
+Prefer the `.zip` if you want the plugins in your own user folder rather than system-wide. Copy the bundles to:
 
 | Format | Path |
 |---|---|
@@ -176,10 +184,10 @@ Crypta is an independent open-source project. It is not affiliated with, endorse
 
 Tagged releases (`v*`) are built and published automatically by [`.github/workflows/release.yml`](.github/workflows/release.yml) — nothing is built or uploaded by hand. Release notes are the matching section of [`CHANGELOG.md`](CHANGELOG.md).
 
-- **macOS** — AU (`.component`), VST3 (`.vst3`) and Standalone, Universal Binary (arm64 + x86_64), signed with a Developer ID Application certificate (org-level secrets, shared across the Basilica Audio suite), notarized and stapled. Installs and opens without a Gatekeeper warning.
+- **macOS** — AU (`.component`), VST3 (`.vst3`) and Standalone, Universal Binary (arm64 + x86_64), signed with a Developer ID Application certificate (org-level secrets, shared across the Basilica Audio suite), notarized and stapled. Installs and opens without a Gatekeeper warning. Shipped both as a `.zip` of the three bundles and as a `.pkg` installer.
 - **Windows** — VST3 and Standalone, **unsigned**. On first run, Windows SmartScreen may show a "Windows protected your PC" warning; choose **More info**, then **Run anyway**. Authenticode signing needs a paid certificate and is not part of this phase.
-- Every archive is accompanied by a `.sha256` checksum file.
+- Every asset is accompanied by a `.sha256` checksum file.
 
-A `.pkg` installer for macOS is wired up in the release workflow but not yet shipped: it requires a *Developer ID Installer* certificate, a different Apple certificate type from the application-signing one this repo uses. The step stays inert until that certificate exists. See [`docs/building.md`](docs/building.md#macos-pkg-installer) for the full release process and the secret names.
+The macOS `.pkg` itself is **not yet signed**, and its filename says so (`…-macos-unsigned.pkg`). Signing an installer requires a *Developer ID Installer* certificate — a different Apple certificate type from the application-signing one this repo already uses, and one that cannot be substituted by it. The bundles inside the installer are signed and notarized regardless, so only the installer wrapper needs a right-click → **Open**. See [`docs/building.md`](docs/building.md#macos-pkg-installer) for the full release process, the secret names, and how the workflow switches to the signed path on its own once the certificate exists.
 
 The latest published version is always on the [Releases](../../releases) page.

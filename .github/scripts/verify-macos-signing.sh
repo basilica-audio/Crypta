@@ -9,8 +9,11 @@
 #      correct tool for a productsign signature on an installer)
 #   2. spctl --assess                            (Gatekeeper's own opinion —
 #                                                 requires notarization, not
-#                                                 just a valid signature; uses
-#                                                 --type install for a .pkg)
+#                                                 just a valid signature;
+#                                                 --type install for a .pkg and
+#                                                 for plug-in bundles, --type
+#                                                 execute only for a .app —
+#                                                 see the note at the gate)
 #   3. stapler validate                          (a notarization ticket is
 #                                                 physically stapled to the
 #                                                 artefact, so Gatekeeper can
@@ -125,9 +128,21 @@ verify_bundle() {
   # bundle can carry a perfectly valid ad-hoc or Developer ID signature and
   # still fail spctl if it has not been notarized (or, offline, if the
   # notarization ticket has not been stapled — see gate 3).
+  #
+  # Assessment type matters and is not cosmetic. `--type execute` asks "may
+  # this be launched as an application?", which a .component or .vst3 can
+  # never satisfy - they are loadable bundles with no LSMinimumSystemVersion
+  # or executable stub, so Gatekeeper answers `rejected (the code is valid but
+  # does not seem to be an app)` (exit 3) no matter how impeccably they are
+  # signed and notarized. Assessing a plug-in bundle that way turns this gate
+  # into a guaranteed false negative. `--type install` is the assessment a
+  # host application's plug-in scan actually corresponds to, and it reports
+  # `accepted source=Notarized Developer ID` for exactly the same bundles.
+  # Measured against the shipped v0.4.0 artefacts, issue #31.
   local spctl_type=execute
   case "$target" in
-    *.pkg) spctl_type=install ;;
+    *.pkg)              spctl_type=install ;;
+    *.component|*.vst3) spctl_type=install ;;
   esac
   spctl_out=$(spctl --assess --type "$spctl_type" --verbose=4 "$target" 2>&1)
   rc=$?
