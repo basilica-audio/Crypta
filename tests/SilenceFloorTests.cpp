@@ -55,6 +55,34 @@ namespace
     // 2^-24: half of a 24-bit LSB. See the derivation above.
     constexpr float silenceFloor = 5.9604645e-08f;
 
+    // The bound for the OTHER bias regime: `highBias` arriving at an already
+    // prepared instance, where cryp::CircuitDrive ramps the offset across one
+    // block instead of snapping it (a knob move must not click). During that
+    // ramp, ADAA-1 returns the average of the voicing curve f over each
+    // one-sample input segment - f at the segment midpoint, to second order -
+    // while the static-image subtraction at the call sites (issue #34 item 4)
+    // removes f at the segment ENDPOINT. Per sample that mismatch is at most
+    //
+    //     Lmax * delta / 2
+    //
+    // with Lmax <= 1 the largest slope of any voicing curve (hard clip:
+    // exactly 1; the Yeh tanh-fit: 1 at the origin; the normalised Wool diode
+    // solve: < 1) and delta the per-sample offset step: maxBiasOffset (0.15,
+    // src/dsp/CircuitDrive.cpp) over one block at the oversampled rate
+    // (128 * 4 = 512 samples at 48 kHz) -> 0.15 / (2 * 512) = 1.465e-4. The
+    // largest small-signal gain downstream is the Razor character peak's
+    // +5 dB (1.778x); everything else in the path - de-emphasis, the tracked
+    // and tone lowpasses, the DC blocker, the blend, a 0 dB level trim - has
+    // gain <= 1. A factor of 4 covers filter transient overshoot and the
+    // downsampler's ripple: margin on a derivation, not a widening to fit a
+    // measurement.
+    //
+    //     0.15 / (2 * 512) * 1.778 * 4 = 1.042e-3   (~ -59.6 dBFS)
+    //
+    // (Measured on this build: 1.46e-4 on Gnaw, i.e. Lmax * delta / 2 almost
+    // exactly, with the 0 dB Gnaw character filter contributing nothing.)
+    constexpr float biasRampResidualBound = 0.15f / (2.0f * 512.0f) * 1.778f * 4.0f;
+
     struct SilenceMeasurement
     {
         float peak = 0.0f;         // largest |sample| in the measured window
@@ -253,6 +281,119 @@ TEST_CASE ("Silence: High Bias adds DC ahead of the shaper and the blocker takes
 
     CHECK (measured.peak <= silenceFloor);
     CHECK (std::abs (measured.dc) <= silenceFloor);
+
+    // The settling transient is gated too, since issue #34 item 4 - before
+    // the bias image was subtracted at its creation (src/dsp/CircuitDrive.cpp,
+    // the Gnaw/Razor call sites), this measured 0.137 peak: a -17 dBFS thump
+    // while the 10 Hz blocker settled. The bound here is the RAMP residual,
+    // not the silence floor, because this test deliberately turns the bias up
+    // AFTER prepareToPlay() - a knob gesture, which the engine answers with a
+    // one-block offset ramp rather than a snap. What is left inside that ramp
+    // is the ADAA midpoint-vs-endpoint mismatch derived at
+    // `biasRampResidualBound`; measured 1.46e-4 against the 0.137 defect.
+    CHECK (measured.transientPeak <= biasRampResidualBound);
+}
+
+TEST_CASE ("Silence: a state with High Bias at 100 % restores without a DC thump",
+           "[silence][robustness][circuit]")
+{
+    // Issue #34 item 4, the regression test. QA measured a fresh instance
+    // whose SAVED STATE already had High Bias at 100 % emitting a 0.137-peak
+    // (-17 dBFS) DC transient into silence while the 10 Hz blocker settled -
+    // i.e. every session load and preset recall of such a state opened with a
+    // thump. The fix is structural rather than a wider bound: the bias
+    // offset's own image through the shaper is subtracted at the point of
+    // creation (the construction Wool and cryp::LowGrowl already used), and
+    // CircuitDrive::reset() primes each shaper's one-sample ADAA history at
+    // the bias operating point, so a fresh render starts AT its quiescent
+    // point and the blocker has nothing to settle.
+    //
+    // Every voicing is exercised: Gnaw and Razor are the two whose call sites
+    // gained the subtraction, Wool is the one that always had it and must not
+    // have been disturbed.
+    const auto donorState = [] (float voicingIndex)
+    {
+        CryptaAudioProcessor donor;
+        prepareFresh (donor);
+        TestHelpers::setParameter (donor, ParamIDs::driveEngine, 1.0f); // Circuit
+        TestHelpers::setParameter (donor, ParamIDs::highVoicing, voicingIndex);
+        TestHelpers::setParameter (donor, ParamIDs::highBias, 100.0f);
+        TestHelpers::setParameter (donor, ParamIDs::highDrive, 80.0f);
+
+        juce::MemoryBlock state;
+        donor.getStateInformation (state);
+        return state;
+    };
+
+    SECTION ("session load: restore, then prepare, then silence")
+    {
+        // The host order on session load: setStateInformation() before
+        // prepareToPlay(). The bound is the file's own silence floor,
+        // INCLUDING the settling transient - which is exactly where the
+        // 0.137 peak lived before the fix, six orders of magnitude above
+        // this line.
+        for (const auto voicingIndex : { 0.0f, 1.0f, 2.0f })
+        {
+            INFO ("voicing index " << voicingIndex);
+            const auto state = donorState (voicingIndex);
+
+            CryptaAudioProcessor processor;
+            processor.setPlayConfigDetails (2, 2, silenceSampleRate, silenceBlockSize);
+            processor.setStateInformation (state.getData(), static_cast<int> (state.getSize()));
+            processor.prepareToPlay (silenceSampleRate, silenceBlockSize);
+
+            const auto measured = measureSilence (processor);
+
+            INFO ("worst transient " << measured.transientPeak
+                  << ", steady peak " << measured.peak << ", DC " << measured.dc);
+
+            CHECK (measured.transientPeak <= silenceFloor);
+            CHECK (measured.peak <= silenceFloor);
+            CHECK (std::abs (measured.dc) <= silenceFloor);
+        }
+    }
+
+    SECTION ("mid-playback restore during a silent stretch")
+    {
+        // The preset-recall shape: the instance is already running (High Bias
+        // at its 0 % default) when the max-bias state arrives. highBiasOffset
+        // then RAMPS across one block rather than being snapped, so the
+        // exact-cancellation argument above does not apply sample-for-sample
+        // during that block. The bound is the ramp residual derived at
+        // `biasRampResidualBound` (~ -59.6 dBFS); the defect this guards
+        // against measured 0.137, two orders of magnitude above it.
+        for (const auto voicingIndex : { 0.0f, 1.0f, 2.0f })
+        {
+            INFO ("voicing index " << voicingIndex);
+            const auto state = donorState (voicingIndex);
+
+            CryptaAudioProcessor processor;
+            prepareFresh (processor);
+
+            juce::AudioBuffer<float> buffer (2, silenceBlockSize);
+            juce::MidiBuffer midi;
+
+            const auto blocksPerSecond = static_cast<int> (silenceSampleRate) / silenceBlockSize;
+            float worstAfterRestore = 0.0f;
+
+            for (int block = 0; block < 3 * blocksPerSecond; ++block)
+            {
+                if (block == blocksPerSecond)
+                    processor.setStateInformation (state.getData(), static_cast<int> (state.getSize()));
+
+                buffer.clear();
+                processor.processBlock (buffer, midi);
+
+                if (block >= blocksPerSecond)
+                    worstAfterRestore = juce::jmax (worstAfterRestore,
+                                                     buffer.getMagnitude (0, silenceBlockSize));
+            }
+
+            INFO ("worst |sample| from the restore onwards: " << worstAfterRestore
+                  << " against the derived bound " << biasRampResidualBound);
+            CHECK (worstAfterRestore <= biasRampResidualBound);
+        }
+    }
 }
 
 TEST_CASE ("Silence: the tail after a loud passage decays below the 24-bit floor and stops there", "[silence][robustness]")

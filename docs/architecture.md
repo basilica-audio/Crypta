@@ -134,6 +134,8 @@ remainder (base rate)
 
 The saved oversampling region is what pays for the extra per-voicing filtering. The factor adapts to the host rate (4x ≤ 50 kHz, 2x ≤ 100 kHz, 1x above), on the basis that ADAA-1 contributes 20–30 dB of alias suppression on top of the oversampling headroom.
 
+The High Bias offset that feeds the ADAA clipper never reaches the DC blocker as a static level: every voicing subtracts the clipper's response to the offset *on its own* at the point of creation (`f(offset)` — the `tanh(g·x + b) − tanh(b)` construction `cryp::LowGrowl` uses), and `CircuitDrive::reset()` primes each shaper's one-sample ADAA history at that operating point. So the 10 Hz blocker's quiescent input is zero at every bias setting — a state restored with High Bias at 100 % starts silent instead of thumping while the blocker settles (issue #34 item 4; measured 0.137 peak before, exactly 0.0 after, `tests/SilenceFloorTests.cpp`) — and what the blocker actually removes is the programme-dependent DC that asymmetric clipping of real signal produces, which no static subtraction can know.
+
 Both engines stay prepared at all times, so switching is a branch rather than a reallocation. A switch arms a 256-sample constant-gain crossfade during which **both** engines run, and **flushes the incoming engine** first: only one engine runs at a time, so the idle one's oversampling history and delay lines otherwise hold stale audio and release it as a burst. The crossfade is longer than the brief's 64 samples because the flushed engine needs its own latency to refill before it can be given significant gain.
 
 ### Antialiasing
