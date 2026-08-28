@@ -49,6 +49,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Default` preset as the startup state, so `Default`'s trim is also the fresh-instance gain
   staging, and a fresh instance rendering the suite reference at +0.16 dBFS was the same defect.
   The `outputGain` *parameter default* stays 0 dB.
+### Fixed
+
+- **The x86_64 AU validation gate was testing a transport the plugin never ships into**, and
+  reporting that transport's flakiness as a plugin defect (basilica-audio/Crypta#123). The
+  v0.4.1 release run died with `Trace/BPT trap: 5` inside pluginval's "Parameter thread
+  safety" test against the shipped Universal Binary's x86_64 AU slice, while the same slice's
+  VST3 passed the identical strictness-10 sweep 63 s earlier and arm64 passed everything.
+  - **Root cause, measured rather than inferred.** `.github/scripts/validate-macos-x86_64-slice.sh`
+    pins the slice by installing an `lipo -thin x86_64` copy of the shipped component, which
+    is correct and stays. But it then ran the validator *natively* (arm64). An arm64 host
+    cannot load an x86_64-only AU into its own address space, so AudioToolbox hosted it
+    out-of-process in `AUHostingServiceXPC` and bridged every parameter set, property set and
+    render call across XPC. Sampled mid-run, that configuration shows a live
+    `AUHostingServiceXPC` process and no mapping of the component in the validator; running
+    the validator under `arch -x86_64` instead shows the component's `__TEXT`/`__DATA_CONST`/
+    `__LINKEDIT` mapped into the validator itself and no hosting service at all.
+  - **Neither an Intel Mac nor an Apple Silicon Mac is ever in that state.** Intel runs an
+    x86_64 host against the x86_64 slice; Apple Silicon runs an arm64 host against the arm64
+    slice. Both are arch-matched, both in-process. The XPC configuration existed only as a
+    side effect of thinning the bundle to pin the slice.
+  - **And it is not a neutral side effect.** On the same byte-identical x86_64 bundle: 5/5
+    SUCCESS in-process, against 4 failures in 14 runs out-of-process, the failures landing in
+    the tests that read a parameter back after writing it across the bridge.
+  - **The fix keeps the gate exactly as strict.** Strictness stays at 10, the AU stays in the
+    sweep, and the thinned bundle is still the only thing that pins the slice — the AU
+    pluginval pass and `auval -strict` now run under `arch -x86_64` so the hosting mode
+    matches what ships. The step additionally watches for a live `AUHostingServiceXPC`
+    process throughout the AU pass and fails if one appears, so the gate cannot silently
+    drift back onto the bridge.
+
+### Added
+
+- **`tests/ConcurrentParameterTests.cpp`** — standing in-repo coverage for the property
+  pluginval's "Parameter thread safety" test probes: every non-bypass automatable parameter
+  written from two threads at once (`setValueNotifyingHost` and `setValue`) while
+  `processBlock()` renders, asserting no non-finite output and no runaway magnitude, plus an
+  exact APVTS state round-trip after a concurrent write storm (basilica-audio/Crypta#123).
+  The repository had cross-thread coverage for the IR loader (`CrossThreadReprepareTests.cpp`)
+  and none for the parameter path.
 
 ## [0.4.1] — 2026-08-27
 

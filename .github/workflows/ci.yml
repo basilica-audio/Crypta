@@ -320,11 +320,20 @@ jobs:
         # Not on every pull request, unlike the x86_64 *test suite* step, and
         # the reason is the measured runtime rather than a preference. See
         # .github/scripts/validate-macos-x86_64-slice.sh for the mechanism and
-        # PR #110 for the numbers: this adds 3 min 26 s to a job that bills at a
-        # 10x multiplier, against a defect class - plugin-format conformance of
-        # the Intel slice - that changes far less often than the DSP does. Over
-        # the last 30 days that is ~960 runner-minutes a month here against
-        # ~3020 for every-PR.
+        # PR #110 for the numbers: this added 3 min 26 s to a job that bills at
+        # a 10x multiplier, against a defect class - plugin-format conformance
+        # of the Intel slice - that changes far less often than the DSP does.
+        # Over the last 30 days that was ~960 runner-minutes a month here
+        # against ~3020 for every-PR.
+        #
+        # Issue #123 moved the AU pass and auval to arch-matched, in-process
+        # hosting, which is both the correct configuration and a much cheaper
+        # one - the XPC bridge was most of the cost. Measured locally on an M2
+        # (Rosetta throughout, same pluginval build and strictness): VST3 20s,
+        # AU 27s, auval 1s, 48s total, against the 3 min 26 s above. If CI
+        # reproduces that ratio, the every-PR trade this comment declined is
+        # worth re-opening - tracked separately rather than assumed here, since
+        # the numbers above are CI numbers and 48 s is not.
         #
         # Placing it inside this job rather than in a scheduled workflow of its
         # own is what makes it affordable at all: it reuses the Universal Binary
