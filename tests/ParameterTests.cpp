@@ -311,11 +311,16 @@ TEST_CASE ("Processor instantiates with the expected parameters", "[processor][p
         // The STARTUP value of outputGain is not the layout default asserted
         // above: the constructor resolves the factory Default preset
         // (PresetManager::applyStartupDefault()), and since the issue #34
-        // item 1 clipping fix that preset carries a -2.8 dB output trim so a
-        // fresh instance no longer pushes a -12 dBFS DI past full scale. The
-        // layout default stays 0 dB - it is what "reset to default" on the
+        // item 1 clipping fix that preset carries an output trim so a fresh
+        // instance no longer pushes a nominally tracked input past full scale.
+        // The layout default stays 0 dB - it is what "reset to default" on the
         // control gives - and the startup state is the preset's.
-        CHECK (*apvts.getRawParameterValue (ParamIDs::outputGain) == Catch::Approx (-2.8f).margin (1e-4));
+        //
+        // -3.26 dB, not the original -2.8: the trim was re-derived against the
+        // broader-band suite reference programme (tests/PresetHeadroomTests.cpp),
+        // on which Default measured +0.16 dBFS where the bass DI put it at
+        // -0.31. A fresh instance is 0.46 dB quieter than it was, on purpose.
+        CHECK (*apvts.getRawParameterValue (ParamIDs::outputGain) == Catch::Approx (-3.26f).margin (1e-4));
         CHECK (*apvts.getRawParameterValue (ParamIDs::bypass) == Catch::Approx (0.0f).margin (1e-4));
     }
 

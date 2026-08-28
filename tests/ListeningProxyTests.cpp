@@ -629,9 +629,20 @@ TEST_CASE ("Listening: every factory preset is load-and-play on a nominally trac
     //                 eight of the twelve shipped presets did it (worst:
     //                 Clean Low, Loud Top at +3.52 dBFS) before each got a
     //                 derived `outputGain` trim in presets/factory/*.json.
-    //                 The trims TARGET a peak of -0.3 dBFS on this fixture
-    //                 (headroom for float rounding and for the small drift a
-    //                 voicing tweak upstream may add); the ASSERTED line is
+    //                 Those trims have since been RE-derived against the
+    //                 broader-band suite reference programme (see
+    //                 tests/PresetHeadroomTests.cpp), which is a harsher test
+    //                 than this DI for anything with high-band drive: six
+    //                 presets still cleared this fixture while pushing that
+    //                 one past full scale. Every preset therefore now clears
+    //                 THIS fixture with more room than the -0.3 dBFS the trims
+    //                 target there - measured -0.31 to -6.25 dBFS. The gate
+    //                 below is unchanged and unaffected, because it is a
+    //                 CEILING: more headroom passes it.
+    //                 The trims TARGET a peak of -0.3 dBFS on the suite
+    //                 reference programme (headroom for float rounding and for
+    //                 the small drift a voicing tweak upstream may add); the
+    //                 ASSERTED line here is
     //                 0 dBFS, so the gate fails on reintroduced clipping, not
     //                 on the first 0.1 dB of voicing drift. WHAT THIS
     //                 DELIBERATELY DOES NOT DO is level-match the presets to

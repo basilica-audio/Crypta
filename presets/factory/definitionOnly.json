@@ -16,6 +16,7 @@
         "highDrive": 30.0,
         "eqEnabled": 1.0,
         "eqPeak2Freq": 2800.0,
-        "eqPeak2Gain": 3.0
+        "eqPeak2Gain": 3.0,
+        "outputGain": -0.21
     }
 }

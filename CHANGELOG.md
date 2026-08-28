@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A fleet-comparable factory-preset headroom gate** (`tests/PresetHeadroomTests.cpp`),
+  alongside the existing bass-DI gate in `tests/ListeningProxyTests.cpp` rather than replacing
+  it. The DI is the right reference for what Crypta is *for*; the suite reference programme
+  (four plucked notes spanning E1 41.203 Hz to A5 880.000 Hz, twelve harmonics each,
+  peak-normalised to −12 dBFS) is the one every other plugin in the suite is measured on, and
+  it is deliberately broader-band — a harsher test for anything with high-band drive. Both are
+  now gated at 0 dBFS.
+
+  It also measures **both** ways a user arrives at a preset — a restored session and a
+  mid-session click in the preset browser — the latter held to "below full scale **or** below
+  where you already were", so a transition is blamed only for clipping it introduced.
+
+### Fixed
+
+- **Six factory presets cleared the bass DI while pushing the suite reference programme past
+  0 dBFS** — including `Default`, which is also the fresh-instance state. The `outputGain`
+  trims from the issue #34 item 1 fix were derived against the DI alone, and the DI does not
+  see what the high-band drive does to material an octave and more above it:
+
+  | Preset | On the suite reference | Trim | Now |
+  |---|---:|---:|---:|
+  | Throat | +2.44 dBFS | −2.74 dB (−1.63 → −4.37) | −0.30 dBFS |
+  | Cab-Colored Grind | +1.81 dBFS | −2.12 dB (−1.07 → −3.19) | −0.31 dBFS |
+  | Cut Through | +0.82 dBFS | −1.13 dB (0 → −1.13) | −0.31 dBFS |
+  | Fuzz Wall | +0.45 dBFS | −0.75 dB (−3.16 → −3.91) | −0.30 dBFS |
+  | Glue & Grind | +0.40 dBFS | −0.71 dB (−2.25 → −2.96) | −0.31 dBFS |
+  | Default | +0.16 dBFS | −0.46 dB (−2.80 → −3.26) | −0.30 dBFS |
+
+  Three more sat inside the 0.3 dB drift margin and were brought back onto it (`Circuit Knife`
+  −0.14 → −0.31, `Clean Low, Loud Top` −0.24 → −0.31, `Definition Only` −0.10 → −0.31 dBFS), so
+  the whole shipped set holds the full margin the gate reserves. The three already at or below
+  the target (`Circuit Foundation` −2.29, `Circuit Grind` −0.47, `Sub Lock` −1.18 dBFS) are
+  **not raised** — that would be level-matching, which stays a taste item in #34.
+
+  Every preset still clears the bass DI, with more room than before: −0.31 to −6.25 dBFS.
+
+  **A fresh instance is 0.46 dB quieter, on purpose** — the constructor resolves the factory
+  `Default` preset as the startup state, so `Default`'s trim is also the fresh-instance gain
+  staging, and a fresh instance rendering the suite reference at +0.16 dBFS was the same defect.
+  The `outputGain` *parameter default* stays 0 dB.
+
 ## [0.4.1] — 2026-08-27
 
 ### Added
