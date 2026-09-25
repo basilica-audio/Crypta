@@ -4,10 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
-  # The x86_64 format-validation step below deliberately does not run on the
-  # pull_request path (see its own comment for the cost arithmetic). This makes
-  # it runnable on demand against any branch, which is also how its runtime was
-  # measured and how the demonstration in PR #110 was produced.
+  # The x86_64 format-validation step below now runs on every pull_request too
+  # (issue #125): this repo is public, so GitHub-hosted macOS/Windows runner
+  # minutes are billed at zero regardless of event, and the step itself costs
+  # ~48 s of wall clock (see its own comment). workflow_dispatch stays for
+  # running it on demand against any branch.
   workflow_dispatch:
 
 concurrency:
@@ -36,8 +37,8 @@ jobs:
             # min for the same tree, so the headroom is not slack.
             #
             # 35 -> 40 with the x86_64 format-validation step (issue #108),
-            # measured at 3 min 26 s but only on push/workflow_dispatch, and
-            # carrying its own 15-minute step timeout.
+            # measured at 3 min 26 s pre-#123/#124 and now ~48 s on every event
+            # (issue #125), and carrying its own 15-minute step timeout.
             timeout: 40
           - os: windows-latest
             timeout: 35
@@ -317,31 +318,36 @@ jobs:
           auval -strict -v aufx Cryp Yvsv
 
       - name: Validate the x86_64 slice (macOS)
-        # Not on every pull request, unlike the x86_64 *test suite* step, and
-        # the reason is the measured runtime rather than a preference. See
-        # .github/scripts/validate-macos-x86_64-slice.sh for the mechanism and
-        # PR #110 for the numbers: this added 3 min 26 s to a job that bills at
-        # a 10x multiplier, against a defect class - plugin-format conformance
-        # of the Intel slice - that changes far less often than the DSP does.
-        # Over the last 30 days that was ~960 runner-minutes a month here
-        # against ~3020 for every-PR.
+        # Runs on every pull request (issue #125). It used to run only on
+        # push/workflow_dispatch, and that restriction was a cost decision:
+        # PR #110 measured this step at 3 min 26 s against a job that was
+        # believed to bill at a 10x multiplier for macOS. Both premises turned
+        # out to be wrong.
         #
-        # Issue #123 moved the AU pass and auval to arch-matched, in-process
-        # hosting, which is both the correct configuration and a much cheaper
-        # one - the XPC bridge was most of the cost. Measured locally on an M2
-        # (Rosetta throughout, same pluginval build and strictness): VST3 20s,
-        # AU 27s, auval 1s, 48s total, against the 3 min 26 s above. If CI
-        # reproduces that ratio, the every-PR trade this comment declined is
-        # worth re-opening - tracked separately rather than assumed here, since
-        # the numbers above are CI numbers and 48 s is not.
+        # First, the multiplier: this repository is public, and GitHub-hosted
+        # runner minutes are free on public repos regardless of OS - there is
+        # no multiplier to avoid. Measured directly against this repo's own
+        # billing API on run 35456658671 (2026-09-19, 25 min wall clock):
+        # `GET /repos/basilica-audio/Crypta/actions/runs/35456658671/timing`
+        # returned `"MACOS":{"total_ms":0}` and `"WINDOWS":{"total_ms":0}`.
+        #
+        # Second, the runtime: issue #123 moved the AU pass and auval to
+        # arch-matched, in-process hosting (see
+        # .github/scripts/validate-macos-x86_64-slice.sh for the mechanism),
+        # which is both the correct configuration and a much cheaper one - the
+        # XPC bridge was most of the cost. The step now costs ~48 s of wall
+        # clock instead of 3 min 26 s.
+        #
+        # With the cost at zero billable minutes and ~48 s of wall clock,
+        # there is no trade left to decline: PRs get the same plugin-format
+        # coverage `main` always had, instead of only finding a format
+        # regression after it merges.
         #
         # Placing it inside this job rather than in a scheduled workflow of its
         # own is what makes it affordable at all: it reuses the Universal Binary
         # this job already built, so there is no second ~9 min build to pay for.
-        # A nightly workflow would cost more per month than running this on
-        # every single pull request would, and would report later.
         timeout-minutes: 15
-        if: runner.os == 'macOS' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        if: runner.os == 'macOS'
         shell: bash
         env:
           VST3_PATH: ${{ steps.artefacts.outputs.vst3_path }}
